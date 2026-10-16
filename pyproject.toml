@@ -9,4 +9,6 @@ dependencies = [
     "ipykernel>=7.4.0",
     "pandas>=3.0.6",
     "pyjanitor>=0.32.36",
+    "requests>=2.34.2",
+    "vl-convert-python>=1.9.0.post1",
 ]
