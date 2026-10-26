@@ -950,11 +950,16 @@ save_chart(same_building_trend(ALL_YEARS), "6_same_building_trend")
 # =============================================================================
 
 
-def pareto_curve(df, top_pct=10):
-    """
-    Cumulative share of emissions as buildings are added largest first.
+# Shares of buildings that are marked on the curve
+MARK_PERCENTS = [1, 5, 10]
 
-    Inputs: latest-year DataFrame, and the percent of buildings to mark.
+
+def pareto_curve(df):
+    """
+    Cumulative share of emissions as buildings are added largest first,
+    with the top 1%, 5% and 10% of buildings marked.
+
+    Inputs: latest-year DataFrame.
     Output: an Altair chart.
     """
     ghg = GHG_TOTAL
@@ -963,18 +968,27 @@ def pareto_curve(df, top_pct=10):
         .sort_values(ghg, ascending=False)
         .reset_index(drop=True)
     )
-    cumulative["pct_buildings"] = (cumulative.index + 1) / len(cumulative) * 100
+    building_count = len(cumulative)
+    cumulative["pct_buildings"] = (cumulative.index + 1) / building_count * 100
     cumulative["cum_pct_emissions"] = (
         cumulative[ghg].cumsum() / cumulative[ghg].sum() * 100
     )
-    marker = cumulative.iloc[
-        [(cumulative["pct_buildings"] - top_pct).abs().idxmin()]
-    ].copy()
-    marker["label"] = (
-        f"Top {top_pct}% of buildings = "
-        + marker["cum_pct_emissions"].round().astype(int).astype(str)
-        + "% of emissions"
-    )
+
+    # One marked point for each share of buildings, labeled with the number
+    # of buildings and the share of emissions they produce
+    marks = []
+    for percent in MARK_PERCENTS:
+        buildings = round(building_count * percent / 100)
+        row = cumulative.iloc[buildings - 1]
+        marks.append(
+            {
+                "pct_buildings": row["pct_buildings"],
+                "cum_pct_emissions": row["cum_pct_emissions"],
+                "label": f"Top {percent}% ({buildings:,} buildings) = "
+                f"{row['cum_pct_emissions']:.0f}% of emissions",
+            }
+        )
+    marks = pd.DataFrame(marks)
 
     line = (
         alt.Chart(cumulative)
@@ -982,31 +996,42 @@ def pareto_curve(df, top_pct=10):
         .encode(
             x=alt.X(
                 "pct_buildings:Q",
-                title="% of buildings (largest emitters first)",
+                title="Share of buildings, largest emitters first",
+                axis=alt.Axis(labelExpr="datum.value + '%'"),
             ),
             y=alt.Y(
                 "cum_pct_emissions:Q",
-                title="Cumulative % of emissions",
+                title="Share of total emissions (running total)",
                 scale=alt.Scale(domain=[0, 100]),
+                axis=alt.Axis(labelExpr="datum.value + '%'"),
             ),
         )
     )
-    point = (
-        alt.Chart(marker)
-        .mark_point(size=150, filled=True, color="black")
+    points = (
+        alt.Chart(marks)
+        .mark_point(size=100, filled=True, color="black")
         .encode(x="pct_buildings:Q", y="cum_pct_emissions:Q")
     )
-    text = (
-        alt.Chart(marker)
-        .mark_text(align="left", dx=10, dy=15, fontSize=13)
+    labels = (
+        alt.Chart(marks)
+        .mark_text(align="left", dx=10, dy=14, fontSize=12)
         .encode(x="pct_buildings:Q", y="cum_pct_emissions:Q", text="label:N")
     )
-    chart = (line + point + text).properties(
+    year = df["data_year"].max()
+    return (line + points + labels).properties(
         width=CHART_WIDTH,
         height=LINE_CHART_HEIGHT,
-        title=f"Pareto curve showing cumulative building emissions ({df['data_year'].max()})",
+        title=alt.TitleParams(
+            "About half of emissions come from the top 10% of buildings",
+            subtitle=[
+                "Buildings are sorted from largest to smallest emitter, and "
+                "the line",
+                f"adds up their emissions ({building_count:,} reporting "
+                f"buildings, {year}).",
+            ],
+            anchor="start",
+        ),
     )
-    return chart
 
 
 save_chart(pareto_curve(latest), "7_pareto_curve")
