@@ -1,0 +1,7 @@
+sector,subsector,million_metric_tons_co2e,source
+Buildings & stationary energy,Residential buildings,6.55,"CMAP 2019 inventory, City of Chicago column, residential buildings"
+Buildings & stationary energy,Commercial & institutional,10.45,"CMAP 2019 inventory, City of Chicago column, commercial and institutional buildings and facilities"
+Buildings & stationary energy,Industry & other,1.72,"CMAP 2019 inventory: stationary energy total (18.72) minus residential (6.55) and commercial and institutional (10.45); mostly manufacturing, wastewater and fugitive emissions"
+Transportation,On-road vehicles,5.11,"CMAP 2019 inventory, City of Chicago column, on-road"
+Transportation,Other,2.65,"CMAP 2019 inventory: transportation total (7.76) minus on-road (5.11)"
+Waste,Waste,1.01,"CMAP 2019 inventory, City of Chicago column, waste"

@@ -1,0 +1,19 @@
+sector,subsector,city_of_chicago
+Stationary energy,,18.72
+Stationary energy,Residential buildings,6.55
+Stationary energy,Commercial and institutional buildings and facilities,10.45
+Stationary energy,Manufacturing industries and construction,1.38
+Stationary energy,Energy industries,0
+Stationary energy,Wastewater treatment,0.15
+Stationary energy,Fugitive emissions from oil and natural gas systems,0.20
+Transportation,,7.76
+Transportation,On-road,5.11
+Transportation,Railways,0.46
+Transportation,Waterborne navigation,0.01
+Transportation,Aviation,1.62
+Transportation,Off-road,0.57
+Waste,,1.01
+Waste,Disposal of solid waste generated in the region,0.68
+Waste,Biological treatment of waste generated in the region,+
+Waste,Wastewater generated in the region,0.33
+Total,,27.49

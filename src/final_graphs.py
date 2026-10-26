@@ -199,6 +199,142 @@ top_types = (
 latest_top = latest[latest["primary_property_type"].isin(top_types)]
 
 
+MILLION = 1_000_000
+THOUSAND = 1_000
+
+SECTOR_CSV = DATA_DIR / "chicago_emissions_by_sector_2019.csv"
+REPORTING_ROW = "Large reporting buildings (2023)"
+# A single space reserves an empty band that separates the 2023 row
+SPACER_ROW = " "
+ROW_LABELS = {
+    "Buildings & stationary energy": "Buildings & industry (2019)",
+    "Transportation": "Transportation (2019)",
+    "Waste": "Waste (2019)",
+}
+ROW_ORDER = [*ROW_LABELS.values(), SPACER_ROW, REPORTING_ROW]
+
+# Subsector stack order and colors: blues are buildings, grays are other
+SUBSECTOR_COLORS = {
+    "Commercial & institutional": "#1C5F8A",
+    "Residential buildings": "#2F86BE",
+    "Industry & other": "#A8D0E6",
+    "On-road vehicles": "#4A5568",
+    "Other": "#9AA5B4",
+    "Waste": "#C9CED6",
+    "Large reporting buildings": "#0E4A73",
+}
+SUBSECTOR_ORDER = list(SUBSECTOR_COLORS)
+
+SECTOR_CHART_WIDTH = 500
+SECTOR_CHART_HEIGHT = 240
+SECTOR_AXIS_MAX = 24  # Million tons; leaves room for the total labels
+# Value column in the sector CSV (million metric tons of CO2e)
+SECTOR_VALUE = "million_metric_tons_co2e"
+MIN_LABELED_SEGMENT = 3.0  # Smallest segment (million tons) given a label
+
+
+def make_sector_chart(df):
+    """
+    Stacked bars of Chicago's emissions by sector, plus the emissions
+    covered by this analysis (large buildings that reported in 2023).
+
+    Citywide numbers come from data/chicago_emissions_by_sector_2019.csv
+    (CMAP, 2019). The last bar is computed from the benchmarking data.
+
+    Inputs: latest-year DataFrame of reporting buildings.
+    Output: an Altair chart.
+    Errors: raises FileNotFoundError if the sector CSV is missing.
+    """
+    sectors = pd.read_csv(SECTOR_CSV)
+    sectors["row"] = sectors["sector"].map(ROW_LABELS)
+    reporting_total = (
+        df["total_ghg_emissions_metric_tons_co2e_"].sum() / MILLION
+    )
+    reporting = pd.DataFrame(
+        {
+            "subsector": ["Large reporting buildings"],
+            SECTOR_VALUE: [reporting_total],
+            "row": [REPORTING_ROW],
+        }
+    )
+    rows = pd.concat([sectors, reporting], ignore_index=True)
+    rows["subsector_rank"] = rows["subsector"].map(SUBSECTOR_ORDER.index)
+
+    # Stack the segments in subsector order within each row and find the
+    # middle of each one, where its label goes
+    rows = rows.sort_values(["row", "subsector_rank"])
+    segment_end = rows.groupby("row")[SECTOR_VALUE].cumsum()
+    rows["segment_middle"] = segment_end - rows[SECTOR_VALUE] / 2
+
+    # Row totals, shown just past the end of each bar
+    totals = rows.groupby("row", as_index=False)[SECTOR_VALUE].sum()
+    totals["label"] = totals[SECTOR_VALUE].map("{:.1f}M tons".format)
+
+    # Only label segments that are wide enough to hold a number
+    labeled_segments = rows[rows[SECTOR_VALUE] >= MIN_LABELED_SEGMENT]
+
+    y_rows = alt.Y(
+        "row:N",
+        title=None,
+        scale=alt.Scale(domain=ROW_ORDER),
+        axis=alt.Axis(labelLimit=240),
+    )
+    bars = (
+        alt.Chart(rows)
+        .mark_bar()
+        .encode(
+            y=y_rows,
+            x=alt.X(
+                f"{SECTOR_VALUE}:Q",
+                title="Million metric tons CO2e per year",
+                scale=alt.Scale(domain=[0, SECTOR_AXIS_MAX]),
+            ),
+            color=alt.Color(
+                "subsector:N",
+                title=None,
+                scale=alt.Scale(
+                    domain=SUBSECTOR_ORDER,
+                    range=list(SUBSECTOR_COLORS.values()),
+                ),
+                legend=alt.Legend(orient="bottom", columns=2),
+            ),
+            order=alt.Order("subsector_rank:Q"),
+        )
+    )
+    segment_labels = (
+        alt.Chart(labeled_segments)
+        .mark_text(color="white", fontSize=12, fontWeight="bold")
+        .encode(
+            y=y_rows,
+            x=alt.X("segment_middle:Q"),
+            text=alt.Text(f"{SECTOR_VALUE}:Q", format=".1f"),
+        )
+    )
+    total_labels = (
+        alt.Chart(totals)
+        .mark_text(align="left", dx=5, fontSize=12, color=INK)
+        .encode(y=y_rows, x=alt.X(f"{SECTOR_VALUE}:Q"), text="label:N")
+    )
+
+    return (bars + segment_labels + total_labels).properties(
+        width=SECTOR_CHART_WIDTH,
+        height=SECTOR_CHART_HEIGHT,
+        title=alt.TitleParams(
+            "Buildings are Chicago's biggest source of emissions",
+            subtitle=[
+                "Citywide figures are for 2019 (CMAP). The bottom bar is 2023",
+                "data for large buildings that reported to the city.",
+            ],
+            anchor="start",
+        ),
+    )
+
+
+make_sector_chart(latest).save(
+    OUTPUT_DIR / "0_citywide_emissions_by_sector.png"
+)
+
+
 # Full-city map view
 MAP_CENTER = [-87.68, 41.84]
 MAP_SCALE = 72000
