@@ -28,6 +28,8 @@ from constants import (
     LINE_CHART_HEIGHT,
     MILLION,
     OUTPUT_DIR,
+    PANEL_ROW_HEIGHT,
+    PANEL_SPACING,
     PRIORITY_HEIGHT,
     PRIORITY_WIDTH,
     SECTOR_VALUE,
@@ -69,6 +71,29 @@ def save_chart(chart, name, scale_factor=1.0, svg=False):
     chart.save(OUTPUT_DIR / f"{name}.png", scale_factor=scale_factor)
     if svg:
         chart.save(OUTPUT_DIR / f"{name}.svg")
+
+
+def make_category_row():
+    """
+    Build the row facet that splits a chart into one panel per building
+    category, in CATEGORY_ORDER, with a bold heading above each panel.
+
+    Inputs: none.
+    Output: an Altair Row facet on the "category" column.
+    """
+    return alt.Row(
+        "category:N",
+        sort=CATEGORY_ORDER,
+        title=None,
+        header=alt.Header(
+            labelAngle=0,
+            labelAlign="left",
+            labelOrient="top",
+            labelFontSize=14,
+            labelFontWeight="bold",
+            labelPadding=4,
+        ),
+    )
 
 
 # =============================================================================
@@ -629,10 +654,8 @@ save_chart(emissions_by_type_bar_chart(latest), "3_emissions_by_type")
 # =============================================================================
 
 
-# Box thickness and row height (pixels), and the gap between panels
+# Box thickness (pixels)
 BOX_THICKNESS = 12
-BOX_ROW_HEIGHT = 22
-PANEL_SPACING = 14
 
 
 def emissions_by_type_box_plot(df):
@@ -675,21 +698,9 @@ def emissions_by_type_box_plot(df):
             y=alt.Y("axis_label:N", title=None, sort=type_order),
             color=alt.value(FLAG_BLUE),
         )
-        .properties(width=CHART_WIDTH, height=alt.Step(BOX_ROW_HEIGHT))
+        .properties(width=CHART_WIDTH, height=alt.Step(PANEL_ROW_HEIGHT))
         .facet(
-            row=alt.Row(
-                "category:N",
-                sort=CATEGORY_ORDER,
-                title=None,
-                header=alt.Header(
-                    labelAngle=0,
-                    labelAlign="left",
-                    labelOrient="top",
-                    labelFontSize=14,
-                    labelFontWeight="bold",
-                    labelPadding=4,
-                ),
-            ),
+            row=make_category_row(),
             spacing=PANEL_SPACING,
         )
         .resolve_scale(y="independent")
@@ -715,29 +726,22 @@ save_chart(emissions_by_type_box_plot(latest_top), "4_emissions_type_box")
 # =============================================================================
 
 
+# Natural gas labels are drawn only on segments at least this wide (share)
+MIN_GAS_LABEL_SHARE = 0.10
+
+
 def fuel_mix(df):
     """
-    Stacked bars of each property type's share of energy by fuel.
+    Stacked bars of each property type's share of energy by fuel, with one
+    panel per building category.
+
+    Panels follow CATEGORY_ORDER, and types are sorted by their natural gas
+    share within each panel. Natural gas is drawn first, with its share
+    printed on the bar. Fuels that no building uses are left out.
 
     Inputs: latest-year DataFrame (top property types).
     Output: an Altair chart.
     """
-    fuel_use = (
-        df.assign(**{c: df[c].clip(lower=0) for c in FUEL_COLS})
-        .groupby("primary_property_type")[list(FUEL_COLS)]
-        .sum()
-        .rename(columns=FUEL_COLS)
-        .reset_index()
-        .melt("primary_property_type", var_name="fuel", value_name="kbtu")
-    )
-    fuel_use["share"] = fuel_use["kbtu"] / fuel_use.groupby(
-        "primary_property_type"
-    )["kbtu"].transform("sum")
-    type_order = (
-        fuel_use[fuel_use["fuel"] == "Natural gas"]
-        .sort_values("share", ascending=False)["primary_property_type"]
-        .tolist()
-    )
     fuel_order = [
         "Natural gas",
         "Electricity",
@@ -745,33 +749,104 @@ def fuel_mix(df):
         "District chilled water",
         "Other fuel",
     ]
+    fuel_use = (
+        df.assign(**{c: df[c].clip(lower=0) for c in FUEL_COLS})
+        .groupby("type_label", observed=True)[list(FUEL_COLS)]
+        .sum()
+        .rename(columns=FUEL_COLS)
+        .reset_index()
+        .melt("type_label", var_name="fuel", value_name="kbtu")
+    )
+    fuel_use["share"] = fuel_use["kbtu"] / fuel_use.groupby("type_label")[
+        "kbtu"
+    ].transform("sum")
 
-    chart = (
-        alt.Chart(fuel_use)
+    # Leave out fuels that nobody uses, so they do not appear in the legend
+    fuel_totals = fuel_use.groupby("fuel")["kbtu"].sum()
+    fuels_used = [f for f in fuel_order if fuel_totals[f] > 0]
+    gas_share = fuel_totals["Natural gas"] / fuel_totals.sum()
+    fuel_use = fuel_use[fuel_use["fuel"].isin(fuels_used)].copy()
+
+    # Panel (category) and axis label, with the number of buildings, for each
+    # type. Natural gas is drawn first, so its label sits at half its share.
+    reports_fuel = df[list(FUEL_COLS)].notna().any(axis=1)
+    type_info = (
+        df.assign(reports_fuel=reports_fuel)
+        .groupby("type_label", observed=True)
+        .agg(category=("category", "first"), buildings=("reports_fuel", "sum"))
+        .reset_index()
+    )
+    type_info["axis_label"] = (
+        type_info["type_label"]
+        + " ("
+        + type_info["buildings"].map("{:,}".format)
+        + ")"
+    )
+    fuel_use = fuel_use.merge(type_info, on="type_label")
+    fuel_use["gas_middle"] = fuel_use["share"] / 2
+
+    # Sort types by natural gas share (Altair draws each panel in this order)
+    gas_rows = fuel_use[fuel_use["fuel"] == "Natural gas"]
+    type_order = gas_rows.sort_values("share", ascending=False)[
+        "axis_label"
+    ].tolist()
+
+    y_types = alt.Y("axis_label:N", title=None, sort=type_order)
+    bars = (
+        alt.Chart()
         .mark_bar()
         .encode(
             x=alt.X(
                 "share:Q",
-                title="Share of energy use (kBtu)",
+                title="Share of energy use",
                 axis=alt.Axis(format="%"),
             ),
-            y=alt.Y("primary_property_type:N", title=None, sort=type_order),
+            y=y_types,
             color=alt.Color(
                 "fuel:N",
                 title="Fuel",
-                sort=fuel_order,
                 scale=FUEL_SCALE,
+                legend=alt.Legend(values=fuels_used),
             ),
             order=alt.Order("fuel_rank:Q"),
         )
         .transform_calculate(fuel_rank=f"indexof({fuel_order}, datum.fuel)")
-        .properties(
-            width=CHART_WIDTH,
-            height=CHART_HEIGHT,
-            title=f"Fuel mix by property type ({LATEST_YEAR})",
+    )
+    gas_labels = (
+        alt.Chart()
+        .transform_filter(
+            f"datum.fuel == 'Natural gas' && datum.share >= {MIN_GAS_LABEL_SHARE}"
+        )
+        .mark_text(color="white", fontSize=11, fontWeight="bold")
+        .encode(
+            x=alt.X("gas_middle:Q"),
+            y=y_types,
+            text=alt.Text("share:Q", format=".0%"),
         )
     )
-    return chart
+
+    return (
+        alt.layer(bars, gas_labels)
+        .properties(width=CHART_WIDTH, height=alt.Step(PANEL_ROW_HEIGHT))
+        .facet(
+            row=make_category_row(),
+            data=fuel_use,
+            spacing=PANEL_SPACING,
+        )
+        .resolve_scale(y="independent")
+        .properties(
+            title=alt.TitleParams(
+                f"Fuel mix by property type ({LATEST_YEAR})",
+                subtitle=[
+                    f"Natural gas is {gas_share:.0%} of all the energy these "
+                    "buildings use,",
+                    "and over 60% in multifamily housing, senior living and "
+                    "K-12 schools.",
+                ],
+                anchor="start",
+            )
+        )
+    )
 
 
 save_chart(fuel_mix(latest_top), "5_fuel_mix")

@@ -39,6 +39,10 @@ TOP_N_TYPES = 24
 MILLION = 1_000_000
 THOUSAND = 1_000
 
+# Panel charts: row height (pixels) and gap between panels
+PANEL_ROW_HEIGHT = 22
+PANEL_SPACING = 14
+
 # Shared chart size (pixels) and sizes for charts that differ
 CHART_WIDTH = 500
 CHART_HEIGHT = 380
