@@ -16,8 +16,8 @@ import math
 from pathlib import Path
 import numpy as np
 
+from categories import CATEGORY_ORDER, SHORT_TYPE_NAMES, add_category_column
 from constants import (
-    BOX_PLOT_HEIGHT,
     CHART_HEIGHT,
     CHART_WIDTH,
     DATA_DIR,
@@ -83,7 +83,8 @@ def load_chicago_benchmarks():
 
     Inputs: none (reads data/Chicago_Energy_Benchmarking_20261001.csv).
     Output: a DataFrame with snake_case columns, numeric columns converted,
-        and only the buildings that submitted data.
+        only the buildings that submitted data, and building category
+        columns added (see categories.py).
     Errors: raises FileNotFoundError if the CSV is missing.
     """
     chi_bench_df = pd.read_csv(
@@ -111,7 +112,7 @@ def load_chicago_benchmarks():
         *FUEL_COLS.keys(),
     ]:
         clean_df[c] = pd.to_numeric(clean_df[c], errors="coerce")
-    return clean_df
+    return add_category_column(clean_df)
 
 
 def load_chicago_geojson(path=DATA_DIR / "chicago_community_areas.geojson"):
@@ -515,13 +516,6 @@ OTHER_BAR_COLOR = "#B8C4D0"
 # by one gasoline-powered passenger vehicle in a year.
 TONS_CO2E_PER_CAR_YEAR = 4.29
 
-# Shorter display names for property types with long labels.
-SHORT_TYPE_NAMES = {
-    "Hospital (General Medical & Surgical)": "Hospital",
-    "Supermarket/Grocery Store": "Supermarket",
-    "Senior Living Community": "Senior living",
-}
-
 
 def format_compact_tons(amount):
     """
@@ -635,40 +629,82 @@ save_chart(emissions_by_type_bar_chart(latest), "3_emissions_by_type")
 # =============================================================================
 
 
+# Box thickness and row height (pixels), and the gap between panels
+BOX_THICKNESS = 12
+BOX_ROW_HEIGHT = 22
+PANEL_SPACING = 14
+
+
 def emissions_by_type_box_plot(df):
     """
-    Box plot of emissions per square foot within each property type.
+    Box plot of emissions per square foot within each property type, with
+    one panel per building category.
+
+    Panels follow CATEGORY_ORDER, and types are sorted by median within
+    each panel. The sort order is worked out here because Altair ignores a
+    median sort on box plots. Each label shows the number of buildings.
 
     Inputs: latest-year DataFrame (top property types).
     Output: an Altair chart.
     """
     d = df.dropna(subset=[GHG_INTENSITY])
-    chart = (
+    type_stats = (
+        d.groupby("type_label", observed=True)[GHG_INTENSITY]
+        .agg(median="median", buildings="count")
+        .reset_index()
+    )
+    type_stats["axis_label"] = (
+        type_stats["type_label"]
+        + " ("
+        + type_stats["buildings"].map("{:,}".format)
+        + ")"
+    )
+    type_order = type_stats.sort_values("median", ascending=False)[
+        "axis_label"
+    ].tolist()
+    d = d.merge(type_stats[["type_label", "axis_label"]], on="type_label")
+
+    return (
         alt.Chart(d)
-        .mark_boxplot(extent=1.5)
+        .mark_boxplot(extent=1.5, size=BOX_THICKNESS)
         .encode(
             x=alt.X(
                 f"{GHG_INTENSITY}:Q",
-                title="GHG intensity (kg CO2e / sq ft)",
+                title="Emissions per square foot (kg CO2e / sq ft)",
             ),
-            y=alt.Y(
-                "primary_property_type:N",
-                title=None,
-                sort=alt.EncodingSortField(
-                    GHG_INTENSITY,
-                    op="median",
-                    order="descending",
-                ),
-            ),
+            y=alt.Y("axis_label:N", title=None, sort=type_order),
             color=alt.value(FLAG_BLUE),
         )
+        .properties(width=CHART_WIDTH, height=alt.Step(BOX_ROW_HEIGHT))
+        .facet(
+            row=alt.Row(
+                "category:N",
+                sort=CATEGORY_ORDER,
+                title=None,
+                header=alt.Header(
+                    labelAngle=0,
+                    labelAlign="left",
+                    labelOrient="top",
+                    labelFontSize=14,
+                    labelFontWeight="bold",
+                    labelPadding=4,
+                ),
+            ),
+            spacing=PANEL_SPACING,
+        )
+        .resolve_scale(y="independent")
         .properties(
-            width=CHART_WIDTH,
-            height=BOX_PLOT_HEIGHT,
-            title=f"Variation in emissions within building types ({LATEST_YEAR})",
+            title=alt.TitleParams(
+                "Variation in emissions per square foot by building type",
+                subtitle=[
+                    "Each box spans the middle half of buildings of that type;",
+                    f"the white line is the median ({LATEST_YEAR}).",
+                    "Number of buildings in parentheses.",
+                ],
+                anchor="start",
+            )
         )
     )
-    return chart
 
 
 save_chart(emissions_by_type_box_plot(latest_top), "4_emissions_type_box")

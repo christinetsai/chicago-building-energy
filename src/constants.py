@@ -42,7 +42,6 @@ THOUSAND = 1_000
 # Shared chart size (pixels) and sizes for charts that differ
 CHART_WIDTH = 500
 CHART_HEIGHT = 380
-BOX_PLOT_HEIGHT = 400
 LINE_CHART_HEIGHT = 350
 PRIORITY_WIDTH = 600
 PRIORITY_HEIGHT = 450
