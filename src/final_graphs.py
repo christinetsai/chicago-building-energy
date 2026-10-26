@@ -1,7 +1,8 @@
 """
 final_graphs.py
 
-Generates the charts for the Chicago building energy analysis.
+Generates the charts for the Chicago building energy analysis and saves
+them to static-viz/charts/.
 
 Usage: uv run python src/final_graphs.py
 """
@@ -15,116 +16,76 @@ import math
 from pathlib import Path
 import numpy as np
 
+from constants import (
+    BOX_PLOT_HEIGHT,
+    CHART_HEIGHT,
+    CHART_WIDTH,
+    DATA_DIR,
+    FUEL_COLS,
+    GEOJSON_URL,
+    GHG_INTENSITY,
+    GHG_TOTAL,
+    LINE_CHART_HEIGHT,
+    MILLION,
+    OUTPUT_DIR,
+    PRIORITY_HEIGHT,
+    PRIORITY_WIDTH,
+    SECTOR_VALUE,
+    THOUSAND,
+    TOP_N_TYPES,
+)
+from theme import (
+    AMBER,
+    CHARCOAL,
+    DEEP_BLUE,
+    FLAG_BLUE,
+    FUEL_SCALE,
+    INK,
+    STAR_RED,
+    STAR_SCALE,
+    apply_theme,
+)
+
+# =============================================================================
+# SETUP
+# Apply theme, set output folder, and helper for saving charts
+# =============================================================================
+
+apply_theme()
+
 alt.data_transformers.disable_max_rows()
 
-# Input and output folders relative to the repo root.
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = PROJECT_ROOT / "data"
-OUTPUT_DIR = PROJECT_ROOT / "static-viz" / "charts"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# Theme based off Chicago flag colors with energy adjacent accents (amber = electricity, flame = natural gas, green = clean energy)
-FLAG_BLUE = "#41B6E6"
-STAR_RED = "#E4002B"
-DEEP_BLUE = "#1C7FB5"
-AMBER = "#F5B700"
-FLAME = "#F2792B"
-GREEN = "#2E9E6B"
-GRAY = "#8D99AE"
-CHARCOAL = "#4A5568"
-INK, MUTED, GRID = "#1B2A3A", "#6B7785", "#E6E9ED"
+def save_chart(chart, name, scale_factor=1.0, svg=False):
+    """
+    Save a chart as a PNG in the output folder and optionally as an SVG.
 
-WARM_RANGE = ["#FFF6E0", "#FBD87A", "#F5A03A", "#E4572E", "#E4002B", "#7A0019"]
-WARM_SCALE = alt.Scale(range=WARM_RANGE)
-COOL_SCALE = alt.Scale(
-    range=["#EAF7FD", "#BDE6F6", "#41B6E6", "#1C7FB5", "#0E4A73"]
-)
-STAR_SCALE = alt.Scale(
-    domain=[0.0, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
-    range=[
-        "#8F0020",
-        "#E4002B",
-        "#EE7078",
-        "#F2979E",
-        "#A0D3EE",
-        "#79C8EE",
-        "#41B6E6",
-        "#1C7FB5",
-    ],
-)
-FUEL_SCALE = alt.Scale(
-    domain=[
-        "Natural gas",
-        "Electricity",
-        "District steam",
-        "District chilled water",
-        "Other fuel",
-    ],
-    range=[FLAME, FLAG_BLUE, GRAY, GREEN, "#0E4A73"],
-)
+    Inputs: an Altair chart, a file name without extension, the PNG
+        resolution multiplier, and svg (True to also save an SVG).
+    Output: none (writes one or two files).
+    """
+    chart.save(OUTPUT_DIR / f"{name}.png", scale_factor=scale_factor)
+    if svg:
+        chart.save(OUTPUT_DIR / f"{name}.svg")
 
 
-@alt.theme.register("chi_bench_theme", enable=True)
-def chi_bench_theme():
-    return alt.theme.ThemeConfig(
-        {
-            "config": {
-                "background": "#ffffff",
-                "font": "Roboto, Helvetica, Arial, sans-serif",
-                "title": {
-                    "anchor": "start",
-                    "fontSize": 18,
-                    "fontWeight": "bold",
-                    "color": INK,
-                    "subtitleColor": MUTED,
-                    "subtitleFontSize": 13,
-                    "offset": 12,
-                },
-                "axis": {
-                    "labelFontSize": 12,
-                    "titleFontSize": 13,
-                    "labelColor": INK,
-                    "titleColor": INK,
-                    "gridColor": GRID,
-                    "domainColor": "#B8C0C8",
-                    "tickColor": "#B8C0C8",
-                },
-                "legend": {
-                    "labelFontSize": 12,
-                    "titleFontSize": 13,
-                    "labelColor": INK,
-                    "titleColor": INK,
-                    "symbolSize": 120,
-                },
-                "view": {"stroke": None},
-                "range": {
-                    "category": [
-                        FLAG_BLUE,
-                        STAR_RED,
-                        AMBER,
-                        GREEN,
-                        FLAME,
-                        GRAY,
-                        DEEP_BLUE,
-                        CHARCOAL,
-                    ]
-                },
-            }
-        }
-    )
+# =============================================================================
+# LOAD DATA
+# Load and filter the benchmarking data and load Chicago geojson
+# =============================================================================
 
 
-FUEL_COLS = {
-    "electricity_use_kbtu_": "Electricity",
-    "natural_gas_use_kbtu_": "Natural gas",
-    "district_steam_use_kbtu_": "District steam",
-    "district_chilled_water_use_kbtu_": "District chilled water",
-    "all_other_fuel_use_kbtu_": "Other fuel",
-}
+def load_chicago_benchmarks():
+    """
+    Load and clean the Chicago Energy Benchmarking data.
 
-
-def chi_bench_df():
+    Inputs: none (reads data/Chicago_Energy_Benchmarking_20261001.csv).
+    Output: a DataFrame with snake_case columns, numeric columns converted,
+        and only the buildings that submitted data.
+    Errors: raises FileNotFoundError if the CSV is missing.
+    """
     chi_bench_df = pd.read_csv(
         DATA_DIR / "Chicago_Energy_Benchmarking_20261001.csv", thousands=","
     )
@@ -145,19 +106,23 @@ def chi_bench_df():
         "energy_star_score",
         "site_eui_kbtu_sq_ft_",
         "source_eui_kbtu_sq_ft_",
-        "total_ghg_emissions_metric_tons_co2e_",
-        "ghg_intensity_kg_co2e_sq_ft_",
+        GHG_TOTAL,
+        GHG_INTENSITY,
         *FUEL_COLS.keys(),
     ]:
         clean_df[c] = pd.to_numeric(clean_df[c], errors="coerce")
     return clean_df
 
 
-# Chicago community areas geojson
-GEOJSON_URL = "https://data.cityofchicago.org/resource/igwz-8jzy.geojson"
-
-
 def load_chicago_geojson(path=DATA_DIR / "chicago_community_areas.geojson"):
+    """
+    Load the Chicago community area shapes.
+
+    Inputs: path to the saved GeoJSON file.
+    Output: the GeoJSON as a dictionary.
+    Errors: raises ValueError if the download has no features, or an
+        HTTP error if the download fails.
+    """
     path = Path(path)
     if path.exists():
         return json.loads(path.read_text())
@@ -177,19 +142,10 @@ CHI_GJ = load_chicago_geojson()
 
 # Get dataset with top types from the latest year
 # Each property can show up multiple times for each report year. Grab records from the latest year
-LATEST_YEAR = chi_bench_df()["data_year"].max()
-latest = chi_bench_df()[chi_bench_df()["data_year"] == LATEST_YEAR].copy()
+ALL_YEARS = load_chicago_benchmarks()
+LATEST_YEAR = ALL_YEARS["data_year"].max()
+latest = ALL_YEARS[ALL_YEARS["data_year"] == LATEST_YEAR].copy()
 
-# There are 45 different types of properties
-# data centers are top 24 with count 5
-type_counts = (
-    latest["primary_property_type"]
-    .value_counts()
-    .rename_axis("primary_property_type")
-    .reset_index(name="properties")
-)
-
-TOP_N_TYPES = 24
 top_types = (
     latest["primary_property_type"]
     .value_counts()
@@ -199,8 +155,9 @@ top_types = (
 latest_top = latest[latest["primary_property_type"].isin(top_types)]
 
 
-MILLION = 1_000_000
-THOUSAND = 1_000
+# =============================================================================
+# Chart 1: Citywide emissions by sector
+# =============================================================================
 
 SECTOR_CSV = DATA_DIR / "chicago_emissions_by_sector_2019.csv"
 REPORTING_ROW = "Large reporting buildings (2023)"
@@ -228,8 +185,6 @@ SUBSECTOR_ORDER = list(SUBSECTOR_COLORS)
 SECTOR_CHART_WIDTH = 500
 SECTOR_CHART_HEIGHT = 240
 SECTOR_AXIS_MAX = 24  # Million tons; leaves room for the total labels
-# Value column in the sector CSV (million metric tons of CO2e)
-SECTOR_VALUE = "million_metric_tons_co2e"
 MIN_LABELED_SEGMENT = 3.0  # Smallest segment (million tons) given a label
 
 
@@ -247,9 +202,7 @@ def make_sector_chart(df):
     """
     sectors = pd.read_csv(SECTOR_CSV)
     sectors["row"] = sectors["sector"].map(ROW_LABELS)
-    reporting_total = (
-        df["total_ghg_emissions_metric_tons_co2e_"].sum() / MILLION
-    )
+    reporting_total = df[GHG_TOTAL].sum() / MILLION
     reporting = pd.DataFrame(
         {
             "subsector": ["Large reporting buildings"],
@@ -330,10 +283,12 @@ def make_sector_chart(df):
     )
 
 
-make_sector_chart(latest).save(
-    OUTPUT_DIR / "0_citywide_emissions_by_sector.png"
-)
+save_chart(make_sector_chart(latest), "1_citywide_emissions_by_sector")
 
+
+# =============================================================================
+# Chart 2: Building dot map and downtown close-up
+# =============================================================================
 
 # Full-city map view
 MAP_CENTER = [-87.68, 41.84]
@@ -348,7 +303,6 @@ INSET_WIDTH = 260
 INSET_HEIGHT = 240
 
 DOT_SIZE_RANGE = [3, 45]
-EMISSIONS_COLUMN = "total_ghg_emissions_metric_tons_co2e_"
 
 
 def calculate_view_bounds(center, scale, width, height):
@@ -443,7 +397,7 @@ def make_dot_layer(data, size_domain, show_legend=True, clip=False):
             longitude="longitude:Q",
             latitude="latitude:Q",
             size=alt.Size(
-                f"{EMISSIONS_COLUMN}:Q",
+                f"{GHG_TOTAL}:Q",
                 scale=alt.Scale(
                     domain=size_domain, range=DOT_SIZE_RANGE, type="sqrt"
                 ),
@@ -457,7 +411,7 @@ def make_dot_layer(data, size_domain, show_legend=True, clip=False):
                 legend=color_legend,
             ),
             # Draw the largest dots first so small ones are not hidden
-            order=alt.Order(f"{EMISSIONS_COLUMN}:Q", sort="descending"),
+            order=alt.Order(f"{GHG_TOTAL}:Q", sort="descending"),
         )
     )
 
@@ -472,6 +426,17 @@ def select_rated_buildings(df):
     return df.dropna(subset=["chicago_energy_rating"])
 
 
+def get_emissions_range(d):
+    """
+    Find the smallest and largest emissions, used to scale dot sizes the
+    same way on both maps.
+
+    Inputs: a DataFrame with the total emissions column.
+    Output: a list [smallest, largest] in metric tons CO2e.
+    """
+    return [d[GHG_TOTAL].min(), d[GHG_TOTAL].max()]
+
+
 def building_dot_map(df):
     """
     Map every rated building.
@@ -480,7 +445,7 @@ def building_dot_map(df):
     Output: an Altair chart.
     """
     d = select_rated_buildings(df)
-    size_domain = [d[EMISSIONS_COLUMN].min(), d[EMISSIONS_COLUMN].max()]
+    size_domain = get_emissions_range(d)
     return (
         (
             make_city_layer()
@@ -512,7 +477,7 @@ def building_downtown_closeup(df):
     Output: an Altair chart with a dashed frame matching the outline box.
     """
     d = select_rated_buildings(df)
-    size_domain = [d[EMISSIONS_COLUMN].min(), d[EMISSIONS_COLUMN].max()]
+    size_domain = get_emissions_range(d)
     west, south, east, north = INSET_BOUNDS
     downtown = d[
         d["longitude"].between(west, east) & d["latitude"].between(south, north)
@@ -530,107 +495,15 @@ def building_downtown_closeup(df):
     )
 
 
-dot_map = building_dot_map(latest_top)
-dot_map.save(OUTPUT_DIR / "1_building_dot_map.png")
-dot_map.save(OUTPUT_DIR / "1_building_dot_map.svg")
-downtown_closeup = building_downtown_closeup(latest_top)
-downtown_closeup.save(OUTPUT_DIR / "1_downtown_closeup.png")
-downtown_closeup.save(OUTPUT_DIR / "1_downtown_closeup.svg")
-
-
-def building_choropleth(df, metric):
-    community_area = (
-        df.assign(
-            ca_key=df["community_area"].astype(str).str.upper().str.strip()
-        )
-        .groupby("ca_key")
-        .agg(
-            count=("id", "count"),
-            median=("#_of_buildings", "median"),
-            sum=("#_of_buildings", "sum"),
-        )
-        .reset_index()
-    )
-    labels = {
-        "count": "Reporting buildings",
-        "median": "Median # of buildings per property",
-        "sum": "Total buildings",
-    }
-    chart = (
-        alt.Chart(alt.Data(values=CHI_GJ["features"]))
-        .mark_geoshape(stroke="white", strokeWidth=0.5)
-        .transform_lookup(
-            lookup="properties.community",
-            from_=alt.LookupData(
-                community_area, "ca_key", ["count", "median", "sum"]
-            ),
-        )
-        .encode(
-            color=alt.Color(
-                f"{metric}:Q", title=labels[metric], scale=COOL_SCALE
-            ),
-        )
-        .project("mercator")
-        .properties(
-            width=450,
-            height=550,
-            title=f"{labels[metric]} by community area ({LATEST_YEAR})",
-        )
-    )
-    return chart
-
-
-building_choropleth(latest_top, metric="median").save(
-    OUTPUT_DIR / "2.1_building_choropleth.png"
-)
-building_choropleth(latest_top, metric="count").save(
-    OUTPUT_DIR / "2.2_building_choropleth.png"
-)
-building_choropleth(latest_top, metric="sum").save(
-    OUTPUT_DIR / "2.3_building_choropleth.png"
+save_chart(building_dot_map(latest_top), "2_building_dot_map", svg=True)
+save_chart(
+    building_downtown_closeup(latest_top), "2_downtown_closeup", svg=True
 )
 
 
-def ghg_choropleth(df):
-    community_area = (
-        df.assign(
-            ca_key=latest["community_area"].astype(str).str.upper().str.strip()
-        )
-        .groupby("ca_key")
-        .agg(
-            median_ghg_intensity=("ghg_intensity_kg_co2e_sq_ft_", "median"),
-            buildings=("id", "count"),
-        )
-        .reset_index()
-    )
-    chart = (
-        alt.Chart(alt.Data(values=CHI_GJ["features"]))
-        .mark_geoshape(stroke="white", strokeWidth=0.5)
-        .transform_lookup(
-            lookup="properties.community",
-            from_=alt.LookupData(
-                community_area, "ca_key", ["median_ghg_intensity", "buildings"]
-            ),
-        )
-        .encode(
-            color=alt.Color(
-                "median_ghg_intensity:Q",
-                title="Median GHG intensity (kg CO2e / sq ft)",
-                scale=WARM_SCALE,
-            ),
-        )
-        .project("mercator")
-        .properties(
-            width=450,
-            height=550,
-            title=f"Where are the least efficient buildings? ({LATEST_YEAR})",
-        )
-    )
-    return chart
-
-
-ghg_choropleth(latest_top).save(OUTPUT_DIR / "3_ghg_choropleth.png")
-
+# =============================================================================
+# Chart 3: Total emissions by property type
+# =============================================================================
 
 # Number of property types shown, and how many top bars get the highlight.
 TOP_TYPES_SHOWN = 15
@@ -671,17 +544,15 @@ def emissions_by_type_bar_chart(df):
     Inputs: latest-year DataFrame (all property types).
     Output: an Altair chart.
     """
-    ghg = "total_ghg_emissions_metric_tons_co2e_"
     property_type = (
         df.groupby("primary_property_type")
         .agg(
-            total_ghg=(ghg, "sum"),
-            buildings=("id", "count"),
+            total_ghg=(GHG_TOTAL, "sum"),
         )
         .reset_index()
         .nlargest(TOP_TYPES_SHOWN, "total_ghg")
     )
-    share_of_total = property_type["total_ghg"].sum() / df[ghg].sum()
+    share_of_total = property_type["total_ghg"].sum() / df[GHG_TOTAL].sum()
     property_type["type_label"] = property_type[
         "primary_property_type"
     ].replace(SHORT_TYPE_NAMES)
@@ -740,8 +611,8 @@ def emissions_by_type_bar_chart(df):
         alt.layer(bars, labels, cars_axis)
         .resolve_scale(x="independent")
         .properties(
-            width=500,
-            height=380,
+            width=CHART_WIDTH,
+            height=CHART_HEIGHT,
             title=alt.TitleParams(
                 f"Which property types emit the most? ({LATEST_YEAR})",
                 subtitle=[
@@ -756,24 +627,35 @@ def emissions_by_type_bar_chart(df):
     return chart
 
 
-emissions_by_type_bar_chart(latest).save(OUTPUT_DIR / "4_emissions_by_type.png")
+save_chart(emissions_by_type_bar_chart(latest), "3_emissions_by_type")
+
+
+# =============================================================================
+# Chart 4: Emissions per square foot by property type (box plot)
+# =============================================================================
 
 
 def emissions_by_type_box_plot(df):
-    d = df.dropna(subset=["ghg_intensity_kg_co2e_sq_ft_"])
+    """
+    Box plot of emissions per square foot within each property type.
+
+    Inputs: latest-year DataFrame (top property types).
+    Output: an Altair chart.
+    """
+    d = df.dropna(subset=[GHG_INTENSITY])
     chart = (
         alt.Chart(d)
         .mark_boxplot(extent=1.5)
         .encode(
             x=alt.X(
-                "ghg_intensity_kg_co2e_sq_ft_:Q",
+                f"{GHG_INTENSITY}:Q",
                 title="GHG intensity (kg CO2e / sq ft)",
             ),
             y=alt.Y(
                 "primary_property_type:N",
                 title=None,
                 sort=alt.EncodingSortField(
-                    "ghg_intensity_kg_co2e_sq_ft_",
+                    GHG_INTENSITY,
                     op="median",
                     order="descending",
                 ),
@@ -781,107 +663,29 @@ def emissions_by_type_box_plot(df):
             color=alt.value(FLAG_BLUE),
         )
         .properties(
-            width=500,
-            height=400,
+            width=CHART_WIDTH,
+            height=BOX_PLOT_HEIGHT,
             title=f"Variation in emissions within building types ({LATEST_YEAR})",
         )
     )
     return chart
 
 
-emissions_by_type_box_plot(latest_top).save(
-    OUTPUT_DIR / "5_emissions_type_box.png"
-)
+save_chart(emissions_by_type_box_plot(latest_top), "4_emissions_type_box")
 
 
-def building_age_energy_scatter(df):
-    d = df.dropna(subset=["site_eui_kbtu_sq_ft_", "year_built"])
-    d = d[
-        (d["year_built"] > 1850)
-        & (d["site_eui_kbtu_sq_ft_"] < d["site_eui_kbtu_sq_ft_"].quantile(0.99))
-    ]
-    pts = (
-        alt.Chart(d)
-        .mark_circle(size=35, opacity=0.5)
-        .encode(
-            x=alt.X(
-                "year_built:Q",
-                title="Year built",
-                scale=alt.Scale(zero=False),
-                axis=alt.Axis(format="d"),
-            ),
-            y=alt.Y("site_eui_kbtu_sq_ft_:Q", title="Site EUI (kBtu / sq ft)"),
-            color=alt.Color(
-                "chicago_energy_rating:O",
-                title="Energy rating (stars)",
-                scale=STAR_SCALE,
-            ),
-        )
-    )
-    trend = (
-        alt.Chart(d)
-        .transform_loess("year_built", "site_eui_kbtu_sq_ft_")
-        .mark_line(color="black", size=3)
-        .encode(x="year_built:Q", y="site_eui_kbtu_sq_ft_:Q")
-    )
-    chart = (pts + trend).properties(
-        width=550,
-        height=380,
-        title=f"Do older buildings use more energy per square foot? ({LATEST_YEAR})",
-    )
-    return chart
-
-
-building_age_energy_scatter(latest).save(
-    OUTPUT_DIR / "6_building_age_energy_scatter.png"
-)
-
-
-def energy_rating_stacked_bar(df):
-    d = df.dropna(subset=["chicago_energy_rating"])
-    ratings = (
-        d.groupby(["primary_property_type", "chicago_energy_rating"])
-        .agg(buildings=("id", "count"))
-        .reset_index()
-    )
-    ratings["share"] = ratings["buildings"] / ratings.groupby(
-        "primary_property_type"
-    )["buildings"].transform("sum")
-    type_order = (
-        d.groupby("primary_property_type")["chicago_energy_rating"]
-        .mean()
-        .sort_values(ascending=False)
-        .index.tolist()
-    )
-    chart = (
-        alt.Chart(ratings)
-        .mark_bar()
-        .encode(
-            x=alt.X(
-                "share:Q", title="Share of buildings", axis=alt.Axis(format="%")
-            ),
-            y=alt.Y("primary_property_type:N", title=None, sort=type_order),
-            color=alt.Color(
-                "chicago_energy_rating:O",
-                title="Energy rating (stars)",
-                scale=STAR_SCALE,
-            ),
-        )
-        .properties(
-            width=500,
-            height=380,
-            title=f"Chicago Energy Rating mix by property type ({LATEST_YEAR})",
-        )
-    )
-    return chart
-
-
-energy_rating_stacked_bar(latest_top).save(
-    OUTPUT_DIR / "7_energy_rating_stacked_bar.png"
-)
+# =============================================================================
+# Chart 5: Fuel mix by property type
+# =============================================================================
 
 
 def fuel_mix(df):
+    """
+    Stacked bars of each property type's share of energy by fuel.
+
+    Inputs: latest-year DataFrame (top property types).
+    Output: an Altair chart.
+    """
     fuel_use = (
         df.assign(**{c: df[c].clip(lower=0) for c in FUEL_COLS})
         .groupby("primary_property_type")[list(FUEL_COLS)]
@@ -926,21 +730,33 @@ def fuel_mix(df):
         )
         .transform_calculate(fuel_rank=f"indexof({fuel_order}, datum.fuel)")
         .properties(
-            width=500,
-            height=380,
+            width=CHART_WIDTH,
+            height=CHART_HEIGHT,
             title=f"Fuel mix by property type ({LATEST_YEAR})",
         )
     )
     return chart
 
 
-fuel_mix(latest_top).save(OUTPUT_DIR / "8_fuel_mix.png")
+save_chart(fuel_mix(latest_top), "5_fuel_mix")
+
+
+# =============================================================================
+# Chart 6: The same buildings over time
+# =============================================================================
 
 
 def same_building_trend(df, start=2018, end=2023):
+    """
+    Line chart of median energy use and emissions for the buildings that
+    reported every year, indexed to the first year.
+
+    Inputs: all-years DataFrame, and the first and last year to show.
+    Output: an Altair chart.
+    """
     metrics = {
         "site_eui_kbtu_sq_ft_": "Site EUI (energy used)",
-        "ghg_intensity_kg_co2e_sq_ft_": "GHG intensity (emissions)",
+        GHG_INTENSITY: "GHG intensity (emissions)",
     }
     d = df[df["data_year"].between(start, end)]
     wide = d.pivot_table(index="id", columns="data_year", values=list(metrics))
@@ -989,19 +805,28 @@ def same_building_trend(df, start=2018, end=2023):
         .encode(y="y:Q")
     )
     return (ref + lines + labels).properties(
-        width=500,
-        height=350,
+        width=CHART_WIDTH,
+        height=LINE_CHART_HEIGHT,
         title=f"The same {len(ids):,} buildings from {start}–{end}",
     )
 
 
-same_building_trend(chi_bench_df()).save(
-    OUTPUT_DIR / "9_same_building_trend.png"
-)
+save_chart(same_building_trend(ALL_YEARS), "6_same_building_trend")
+
+
+# =============================================================================
+# Chart 7: Cumulative emissions curve
+# =============================================================================
 
 
 def pareto_curve(df, top_pct=10):
-    ghg = "total_ghg_emissions_metric_tons_co2e_"
+    """
+    Cumulative share of emissions as buildings are added largest first.
+
+    Inputs: latest-year DataFrame, and the percent of buildings to mark.
+    Output: an Altair chart.
+    """
+    ghg = GHG_TOTAL
     cumulative = (
         df.dropna(subset=[ghg])
         .sort_values(ghg, ascending=False)
@@ -1046,21 +871,31 @@ def pareto_curve(df, top_pct=10):
         .encode(x="pct_buildings:Q", y="cum_pct_emissions:Q", text="label:N")
     )
     chart = (line + point + text).properties(
-        width=500,
-        height=350,
+        width=CHART_WIDTH,
+        height=LINE_CHART_HEIGHT,
         title=f"Pareto curve showing cumulative building emissions ({df['data_year'].max()})",
     )
     return chart
 
 
-pareto_curve(latest).save(OUTPUT_DIR / "10_pareto_curve.png")
+save_chart(pareto_curve(latest), "7_pareto_curve")
+
+
+# =============================================================================
+# Chart 8: Priority buildings
+# =============================================================================
 
 
 def priority_buildings(df, top_pct=0.10, n_labels=8):
-    ghg, inten = (
-        "total_ghg_emissions_metric_tons_co2e_",
-        "ghg_intensity_kg_co2e_sq_ft_",
-    )
+    """
+    Scatter of emissions intensity vs. total emissions, highlighting the
+    top emitters, poorly rated buildings, and the overlap between them.
+
+    Inputs: latest-year DataFrame, the share of buildings counted as top
+        emitters, and how many overlap buildings to label by name.
+    Output: an Altair chart.
+    """
+    ghg, inten = GHG_TOTAL, GHG_INTENSITY
     d = df.dropna(subset=[ghg, inten, "chicago_energy_rating"]).copy()
     d = d[(d[ghg] > 0) & (d[inten] > 0)]
     cutoff = d[ghg].quantile(1 - top_pct)
@@ -1140,8 +975,8 @@ def priority_buildings(df, top_pct=0.10, n_labels=8):
     )
 
     return (pts + cut_line + cut_text + labels).properties(
-        width=600,
-        height=450,
+        width=PRIORITY_WIDTH,
+        height=PRIORITY_HEIGHT,
         title=alt.TitleParams(
             "Big emitters and poor performers: where they overlap",
             subtitle=subtitle,
@@ -1150,6 +985,4 @@ def priority_buildings(df, top_pct=0.10, n_labels=8):
     )
 
 
-priority_buildings(latest).save(
-    OUTPUT_DIR / "11_priority_buildings.png", scale_factor=2.0
-)
+save_chart(priority_buildings(latest), "8_priority_buildings", scale_factor=2.0)
