@@ -859,41 +859,54 @@ save_chart(fuel_mix(latest_top), "5_fuel_mix")
 
 def same_building_trend(df, start=2018, end=2023):
     """
-    Line chart of median energy use and emissions for the buildings that
-    reported every year, indexed to the first year.
+    Line chart of how the median building's energy use and emissions
+    changed, for the buildings that reported every year. Each building is
+    compared with its own value in the first year, and the line shows the
+    median of those percentages.
 
     Inputs: all-years DataFrame, and the first and last year to show.
     Output: an Altair chart.
     """
+    energy = "Energy used per square foot"
+    emissions = "Emissions per square foot"
     metrics = {
-        "site_eui_kbtu_sq_ft_": "Site EUI (energy used)",
-        GHG_INTENSITY: "GHG intensity (emissions)",
+        "site_eui_kbtu_sq_ft_": energy,
+        GHG_INTENSITY: emissions,
     }
     d = df[df["data_year"].between(start, end)]
     wide = d.pivot_table(index="id", columns="data_year", values=list(metrics))
     ids = wide.dropna().index  # buildings with every metric in every year
-    d = d[d["id"].isin(ids)]
-    trend = (
-        d.groupby("data_year")[list(metrics)].median().rename(columns=metrics)
+    wide = wide.loc[ids]
+
+    # Each building as a percent of its own first-year value, then the
+    # median across buildings for each year
+    trend = pd.DataFrame(
+        {
+            name: (wide[column].div(wide[column][start], axis=0) * 100).median()
+            for column, name in metrics.items()
+        }
     )
-    trend = (
-        (trend / trend.loc[start] * 100)
-        .reset_index()
-        .melt("data_year", var_name="measure", value_name="index")
+
+    # Change from the first to the last year, for the subtitle
+    energy_change = trend.loc[end, energy] / 100 - 1
+    emissions_change = trend.loc[end, emissions] / 100 - 1
+
+    trend = trend.reset_index().melt(
+        "data_year", var_name="measure", value_name="index"
     )
 
     base = alt.Chart(trend).encode(
         x=alt.X("data_year:O", title="Year", axis=alt.Axis(labelAngle=0)),
         y=alt.Y(
             "index:Q",
-            title=f"Median, indexed ({start} = 100)",
+            title=f"Median building, as % of its own {start} level",
             scale=alt.Scale(zero=False),
         ),
         color=alt.Color(
             "measure:N",
             title=None,
             scale=alt.Scale(
-                domain=["Site EUI (energy used)", "GHG intensity (emissions)"],
+                domain=[energy, emissions],
                 range=[DEEP_BLUE, STAR_RED],
             ),
         ),
@@ -918,7 +931,14 @@ def same_building_trend(df, start=2018, end=2023):
     return (ref + lines + labels).properties(
         width=CHART_WIDTH,
         height=LINE_CHART_HEIGHT,
-        title=f"The same {len(ids):,} buildings from {start}–{end}",
+        title=alt.TitleParams(
+            f"The same {len(ids):,} buildings from {start}–{end}",
+            subtitle=(
+                f"Emissions per square foot fell {abs(emissions_change):.0%} "
+                f"while energy use fell {abs(energy_change):.0%}."
+            ),
+            anchor="start",
+        ),
     )
 
 
