@@ -8,9 +8,10 @@ Usage: uv run python src/final_graphs.py
 
 import pandas as pd
 import altair as alt
-import janitor
+import janitor  # noqa: F401  (registers DataFrame.clean_names)
 import requests
 import json
+import math
 from pathlib import Path
 import numpy as np
 
@@ -45,8 +46,8 @@ STAR_SCALE = alt.Scale(
         "#8F0020",
         "#E4002B",
         "#EE7078",
-        "#F6B3B8",
-        "#B3DDF1",
+        "#F2979E",
+        "#A0D3EE",
         "#79C8EE",
         "#41B6E6",
         "#1C7FB5",
@@ -198,35 +199,207 @@ top_types = (
 latest_top = latest[latest["primary_property_type"].isin(top_types)]
 
 
-def building_dot_map(df):
-    d = df.dropna(
-        subset=["chicago_energy_rating"]
-    )  # unrated buildings have no star color
-    chart = (
-        alt.Chart(d)
-        .mark_circle(opacity=0.85, stroke="#6b7785", strokeWidth=0.4)
+# Full-city map view
+MAP_CENTER = [-87.68, 41.84]
+MAP_SCALE = 72000
+MAP_WIDTH = 540
+MAP_HEIGHT = 660
+
+# Downtown close-up view.
+INSET_CENTER = [-87.645, 41.885]
+INSET_SCALE = 150000
+INSET_WIDTH = 260
+INSET_HEIGHT = 240
+
+DOT_SIZE_RANGE = [3, 45]
+EMISSIONS_COLUMN = "total_ghg_emissions_metric_tons_co2e_"
+
+
+def calculate_view_bounds(center, scale, width, height):
+    """
+    Work out the longitude and latitude edges a Mercator view shows.
+
+    Inputs: center as [longitude, latitude] in degrees, the projection
+        scale (pixels per radian), and the view size in pixels.
+    Output: a tuple (west, south, east, north) in degrees.
+    """
+    longitude, latitude = center
+    half_span = math.degrees((width / 2) / scale)
+    center_y = math.log(math.tan(math.pi / 4 + math.radians(latitude) / 2))
+
+    def latitude_at(offset_pixels):
+        y = center_y + offset_pixels / scale
+        return math.degrees(2 * math.atan(math.exp(y)) - math.pi / 2)
+
+    return (
+        longitude - half_span,
+        latitude_at(-height / 2),
+        longitude + half_span,
+        latitude_at(height / 2),
+    )
+
+
+# Area covered by the close-up and outlined on the full map
+INSET_BOUNDS = calculate_view_bounds(
+    INSET_CENTER, INSET_SCALE, INSET_WIDTH, INSET_HEIGHT
+)
+
+
+def make_city_layer(clip=False):
+    """
+    Build the light community-area shapes that outline the city.
+
+    Inputs: clip, True to cut shapes off at the edge of the view.
+    Output: an Altair geoshape chart.
+    """
+    return alt.Chart(alt.Data(values=CHI_GJ["features"])).mark_geoshape(
+        fill="#F1F3F5", stroke="#B8C0C8", strokeWidth=0.6, clip=clip
+    )
+
+
+def make_bounds_layer():
+    """
+    Build a dashed rectangle marking the area shown in the close-up map.
+
+    Inputs: none (uses INSET_BOUNDS).
+    Output: an Altair geoshape chart.
+    """
+    west, south, east, north = INSET_BOUNDS
+    box = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [west, south],
+                    [east, south],
+                    [east, north],
+                    [west, north],
+                    [west, south],
+                ]
+            ],
+        },
+    }
+    return alt.Chart(alt.Data(values=[box])).mark_geoshape(
+        fill=None, stroke=INK, strokeWidth=1.2, strokeDash=[5, 3]
+    )
+
+
+def make_dot_layer(data, size_domain, show_legend=True, clip=False):
+    """
+    Build the building dots, sized by emissions and colored by rating.
+
+    Inputs: a DataFrame of rated buildings; size_domain, the
+        [smallest, largest] emissions used to scale dot sizes (shared by
+        both maps so dots match); show_legend, False to hide the legends;
+        and clip, True to hide dots that fall outside the view.
+    Output: an Altair circle chart.
+    """
+    size_legend = None
+    color_legend = None
+    if show_legend:
+        size_legend = alt.Legend()
+        color_legend = alt.Legend()
+    return (
+        alt.Chart(data)
+        .mark_circle(opacity=0.9, stroke=INK, strokeWidth=0.3, clip=clip)
         .encode(
             longitude="longitude:Q",
             latitude="latitude:Q",
             size=alt.Size(
-                "total_ghg_emissions_metric_tons_co2e_",
-                scale=alt.Scale(range=[5, 60], type="sqrt"),
-                title="Total GHG (tons)",
+                f"{EMISSIONS_COLUMN}:Q",
+                scale=alt.Scale(
+                    domain=size_domain, range=DOT_SIZE_RANGE, type="sqrt"
+                ),
+                title=["Greenhouse gas", "emissions", "(tons per year)"],
+                legend=size_legend,
             ),
             color=alt.Color(
-                "chicago_energy_rating:O", title="Stars", scale=STAR_SCALE
+                "chicago_energy_rating:O",
+                title="Energy rating (stars)",
+                scale=STAR_SCALE,
+                legend=color_legend,
             ),
-        )
-        .project("mercator", center=[-87.68, 41.84], scale=62000)
-        .properties(
-            width=500, height=600, title="Buildings by emissions and rating"
+            # Draw the largest dots first so small ones are not hidden
+            order=alt.Order(f"{EMISSIONS_COLUMN}:Q", sort="descending"),
         )
     )
 
-    return chart
+
+def select_rated_buildings(df):
+    """
+    Keep buildings that have a star rating (unrated ones have no color).
+
+    Inputs: a DataFrame with a "chicago_energy_rating" column.
+    Output: the filtered DataFrame.
+    """
+    return df.dropna(subset=["chicago_energy_rating"])
 
 
-building_dot_map(latest_top).save(OUTPUT_DIR / "1_building_dot_map.png")
+def building_dot_map(df):
+    """
+    Map every rated building.
+
+    Inputs: latest-year DataFrame (top property types).
+    Output: an Altair chart.
+    """
+    d = select_rated_buildings(df)
+    size_domain = [d[EMISSIONS_COLUMN].min(), d[EMISSIONS_COLUMN].max()]
+    return (
+        (
+            make_city_layer()
+            + make_bounds_layer()
+            + make_dot_layer(d, size_domain)
+        )
+        .project("mercator", center=MAP_CENTER, scale=MAP_SCALE)
+        .properties(
+            width=MAP_WIDTH,
+            height=MAP_HEIGHT,
+            title=alt.TitleParams(
+                "Chicago's biggest emitters cluster downtown",
+                subtitle=[
+                    "Each dot is a building: size shows emissions, color shows",
+                    "its Chicago Energy Rating (0-4 stars, 4 is best).",
+                ],
+                anchor="start",
+            ),
+        )
+    )
+
+
+def building_downtown_closeup(df):
+    """
+    Zoomed map of the downtown area outlined on the full map. It has no
+    legend or title, so it can be placed over the full map in Inkscape.
+
+    Inputs: latest-year DataFrame (top property types).
+    Output: an Altair chart with a dashed frame matching the outline box.
+    """
+    d = select_rated_buildings(df)
+    size_domain = [d[EMISSIONS_COLUMN].min(), d[EMISSIONS_COLUMN].max()]
+    west, south, east, north = INSET_BOUNDS
+    downtown = d[
+        d["longitude"].between(west, east) & d["latitude"].between(south, north)
+    ]
+    return (
+        (
+            make_city_layer(clip=True)
+            + make_dot_layer(
+                downtown, size_domain, show_legend=False, clip=True
+            )
+        )
+        .project("mercator", center=INSET_CENTER, scale=INSET_SCALE)
+        .properties(width=INSET_WIDTH, height=INSET_HEIGHT)
+        .configure_view(stroke=INK, strokeWidth=1.2, strokeDash=[5, 3])
+    )
+
+
+dot_map = building_dot_map(latest_top)
+dot_map.save(OUTPUT_DIR / "1_building_dot_map.png")
+dot_map.save(OUTPUT_DIR / "1_building_dot_map.svg")
+downtown_closeup = building_downtown_closeup(latest_top)
+downtown_closeup.save(OUTPUT_DIR / "1_downtown_closeup.png")
+downtown_closeup.save(OUTPUT_DIR / "1_downtown_closeup.svg")
 
 
 def building_choropleth(df, metric):
@@ -409,7 +582,7 @@ def building_age_energy_scatter(df):
             y=alt.Y("site_eui_kbtu_sq_ft_:Q", title="Site EUI (kBtu / sq ft)"),
             color=alt.Color(
                 "chicago_energy_rating:O",
-                title="Stars",
+                title="Energy rating (stars)",
                 scale=STAR_SCALE,
             ),
         )
@@ -459,7 +632,7 @@ def energy_rating_stacked_bar(df):
             y=alt.Y("primary_property_type:N", title=None, sort=type_order),
             color=alt.Color(
                 "chicago_energy_rating:O",
-                title="Stars",
+                title="Energy rating (stars)",
                 scale=STAR_SCALE,
             ),
         )
