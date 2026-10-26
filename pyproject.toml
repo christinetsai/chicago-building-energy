@@ -7,8 +7,13 @@ requires-python = ">=3.13"
 dependencies = [
     "altair>=6.3.0",
     "ipykernel>=7.4.0",
+    "numpy>=2.5.3",
     "pandas>=3.0.6",
     "pyjanitor>=0.32.36",
     "requests>=2.34.2",
     "vl-convert-python>=1.9.0.post1",
 ]
+
+[tool.ruff]
+line-length = 80
+src = ["src"]
