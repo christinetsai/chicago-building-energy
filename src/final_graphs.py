@@ -1143,7 +1143,8 @@ def pareto_curve(df):
         width=CHART_WIDTH,
         height=LINE_CHART_HEIGHT,
         title=alt.TitleParams(
-            "About half of emissions come from the top 10% of buildings",
+            "Cumulative share of emissions, buildings ranked largest to "
+            "smallest",
             subtitle=[
                 "Buildings are sorted from largest to smallest emitter, and "
                 "the line",
