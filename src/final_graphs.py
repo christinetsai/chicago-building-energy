@@ -577,14 +577,15 @@ save_chart(make_bubble_map(latest), "2_building_bubble_map")
 # Chart 3: Total emissions by property type
 # =============================================================================
 
-# Number of property types shown, and how many top bars get the highlight.
+# Types shown, and how many top bars are highlighted
 TOP_TYPES_SHOWN = 15
 HIGHLIGHT_COUNT = 2
 HIGHLIGHT_BAR_COLOR = DEEP_BLUE
 OTHER_BAR_COLOR = "#B8C4D0"
+AVERAGE_PANEL_WIDTH = 240  # Pixels
+LABEL_ROOM = 1.12  # Axis extends past the longest bar for its label
 
-# EPA Greenhouse Gas Equivalencies Calculator: metric tons of CO2e emitted
-# by one gasoline-powered passenger vehicle in a year.
+# Tons of CO2e per gasoline car per year (EPA Equivalencies Calculator)
 TONS_CO2E_PER_CAR_YEAR = 4.29
 
 
@@ -602,9 +603,8 @@ def format_compact_tons(amount):
 
 def emissions_by_type_bar_chart(df):
     """
-    Bar chart of total emissions for the highest-emitting property types.
-
-    The top bars are highlighted and every bar is labeled with its total.
+    Total emissions (left) and average emissions per building (right) for the
+    highest-emitting property types, so total = buildings x average.
 
     Inputs: latest-year DataFrame (all property types).
     Output: an Altair chart.
@@ -613,83 +613,128 @@ def emissions_by_type_bar_chart(df):
         df.groupby("primary_property_type")
         .agg(
             total_ghg=(GHG_TOTAL, "sum"),
+            buildings=(GHG_TOTAL, "count"),
         )
         .reset_index()
         .nlargest(TOP_TYPES_SHOWN, "total_ghg")
     )
     share_of_total = property_type["total_ghg"].sum() / df[GHG_TOTAL].sum()
+    property_type["average_ghg"] = (
+        property_type["total_ghg"] / property_type["buildings"]
+    )
     property_type["type_label"] = property_type[
         "primary_property_type"
     ].replace(SHORT_TYPE_NAMES)
+    # Axis labels include the building count
+    property_type["axis_label"] = (
+        property_type["type_label"]
+        + " ("
+        + property_type["buildings"].map("{:,}".format)
+        + ")"
+    )
     property_type["highlight"] = (
         property_type["total_ghg"].rank(ascending=False) <= HIGHLIGHT_COUNT
     )
     property_type["label"] = property_type["total_ghg"].map(format_compact_tons)
-
-    # Leave room to the right of the longest bar for its label
-    axis_max = property_type["total_ghg"].max() * 1.12
-    bar_scale = alt.Scale(domain=[0, axis_max])
+    property_type["average_label"] = property_type["average_ghg"].map(
+        "{:,.0f}".format
+    )
     property_type["cars"] = property_type["total_ghg"] / TONS_CO2E_PER_CAR_YEAR
-    bars = (
-        alt.Chart(property_type)
-        .mark_bar()
-        .encode(
-            x=alt.X(
-                "total_ghg:Q",
-                title="Greenhouse gas emissions (metric tons per year)",
-                axis=alt.Axis(format="~s"),
-                scale=bar_scale,
-            ),
-            y=alt.Y("type_label:N", sort="-x", title=None),
-            color=alt.condition(
-                alt.datum.highlight,
-                alt.value(HIGHLIGHT_BAR_COLOR),
-                alt.value(OTHER_BAR_COLOR),
-            ),
+    property_type["average_cars"] = (
+        property_type["average_ghg"] / TONS_CO2E_PER_CAR_YEAR
+    )
+
+    # Both panels list types by total, largest first
+    type_order = property_type.sort_values("total_ghg", ascending=False)[
+        "axis_label"
+    ].tolist()
+    bar_color = alt.condition(
+        alt.datum.highlight,
+        alt.value(HIGHLIGHT_BAR_COLOR),
+        alt.value(OTHER_BAR_COLOR),
+    )
+
+    def make_panel(value, label, bar_title, cars, panel_width, show_types):
+        """
+        Build one panel: bars, labels, and a top axis in equivalent cars.
+        """
+        # Leave room past the longest bar for its label
+        axis_max = property_type[value].max() * LABEL_ROOM
+        scale = alt.Scale(domain=[0, axis_max])
+        # Only the left panel names the types
+        y_options = {} if show_types else {"axis": None}
+        y = alt.Y("axis_label:N", sort=type_order, title=None, **y_options)
+        bars = (
+            alt.Chart(property_type)
+            .mark_bar()
+            .encode(
+                x=alt.X(
+                    f"{value}:Q",
+                    title=bar_title,
+                    axis=alt.Axis(format="~s"),
+                    scale=scale,
+                ),
+                y=y,
+                color=bar_color,
+            )
+        )
+        labels = (
+            alt.Chart(property_type)
+            .mark_text(align="left", dx=4, fontSize=12, color=INK)
+            .encode(
+                x=alt.X(f"{value}:Q", scale=scale, axis=None),
+                y=alt.Y("axis_label:N", sort=type_order, **y_options),
+                text=f"{label}:N",
+            )
+        )
+        cars_axis = (
+            alt.Chart(property_type)
+            .mark_point(opacity=0)
+            .encode(
+                x=alt.X(
+                    f"{cars}:Q",
+                    title="Equivalent cars driven for a year (EPA)",
+                    axis=alt.Axis(orient="top", format="~s"),
+                    scale=alt.Scale(
+                        domain=[0, axis_max / TONS_CO2E_PER_CAR_YEAR]
+                    ),
+                ),
+                y=alt.Y("axis_label:N", sort=type_order, **y_options),
+            )
+        )
+        return (
+            alt.layer(bars, labels, cars_axis)
+            .resolve_scale(x="independent")
+            .properties(width=panel_width, height=CHART_HEIGHT)
+        )
+
+    total_panel = make_panel(
+        "total_ghg",
+        "label",
+        "Total emissions (metric tons per year)",
+        "cars",
+        CHART_WIDTH,
+        show_types=True,
+    )
+    average_panel = make_panel(
+        "average_ghg",
+        "average_label",
+        "Average per building (metric tons per year)",
+        "average_cars",
+        AVERAGE_PANEL_WIDTH,
+        show_types=False,
+    )
+    return alt.hconcat(total_panel, average_panel).properties(
+        title=alt.TitleParams(
+            f"Total and average emissions by property type ({LATEST_YEAR})",
+            subtitle=[
+                f"{TOP_TYPES_SHOWN} building types account for "
+                f"{share_of_total:.0%} of emissions from reported buildings.",
+                "Counts in parentheses show how many buildings each type has.",
+            ],
+            anchor="start",
         )
     )
-    labels = (
-        alt.Chart(property_type)
-        .mark_text(align="left", dx=4, fontSize=12, color=INK)
-        .encode(
-            x=alt.X("total_ghg:Q", scale=bar_scale, axis=None),
-            y=alt.Y("type_label:N", sort="-x"),
-            text="label:N",
-        )
-    )
-    # Invisible layer that draws a second axis along the top: the same
-    # scale as the bars, converted from tons to equivalent cars per year
-    cars_axis = (
-        alt.Chart(property_type)
-        .mark_point(opacity=0)
-        .encode(
-            x=alt.X(
-                "cars:Q",
-                title="Equivalent cars driven for a year (EPA)",
-                axis=alt.Axis(orient="top", format="~s"),
-                scale=alt.Scale(domain=[0, axis_max / TONS_CO2E_PER_CAR_YEAR]),
-            ),
-            y=alt.Y("type_label:N", sort="-x"),
-        )
-    )
-    chart = (
-        alt.layer(bars, labels, cars_axis)
-        .resolve_scale(x="independent")
-        .properties(
-            width=CHART_WIDTH,
-            height=CHART_HEIGHT,
-            title=alt.TitleParams(
-                f"Which property types emit the most? ({LATEST_YEAR})",
-                subtitle=[
-                    "Multifamily housing and offices emit the most.",
-                    f"{TOP_TYPES_SHOWN} building types account for "
-                    f"{share_of_total:.0%} of emissions from reported buildings.",
-                ],
-                anchor="start",
-            ),
-        )
-    )
-    return chart
 
 
 save_chart(emissions_by_type_bar_chart(latest), "3_emissions_by_type")
