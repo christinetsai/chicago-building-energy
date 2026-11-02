@@ -12,7 +12,6 @@ import altair as alt
 import janitor  # noqa: F401  (registers DataFrame.clean_names)
 import requests
 import json
-import math
 from pathlib import Path
 import numpy as np
 
@@ -30,6 +29,7 @@ from constants import (
     OUTPUT_DIR,
     PANEL_ROW_HEIGHT,
     PANEL_SPACING,
+    POOR_RATING,
     PRIORITY_HEIGHT,
     PRIORITY_WIDTH,
     SECTOR_VALUE,
@@ -43,8 +43,9 @@ from theme import (
     FLAG_BLUE,
     FUEL_SCALE,
     INK,
+    MUTED,
+    POOR_RATING_COLOR,
     STAR_RED,
-    STAR_SCALE,
     apply_theme,
 )
 
@@ -117,8 +118,13 @@ def load_chicago_benchmarks():
     )
     # normalize column names
     clean_df = chi_bench_df.clean_names()
-    # normalize community area names
-    clean_df["community_area"] = clean_df["community_area"].str.title()
+    # normalize community area names, including spelling differences such as
+    # O'Hare and Ohare
+    clean_df["community_area"] = (
+        clean_df["community_area"]
+        .str.replace("'", "", regex=False)
+        .str.title()
+    )
     # Two types of reporting status are used for submitted building
     clean_df = clean_df[
         clean_df["reporting_status"].isin(["Submitted", "Submitted Data"])
@@ -316,7 +322,7 @@ save_chart(make_sector_chart(latest), "1_citywide_emissions_by_sector")
 
 
 # =============================================================================
-# Chart 2: Building dot map and downtown close-up
+# Chart 2: Bubble map of reporting buildings by community area
 # =============================================================================
 
 # Full-city map view
@@ -325,171 +331,237 @@ MAP_SCALE = 72000
 MAP_WIDTH = 540
 MAP_HEIGHT = 660
 
-# Downtown close-up view.
-INSET_CENTER = [-87.645, 41.885]
-INSET_SCALE = 150000
-INSET_WIDTH = 260
-INSET_HEIGHT = 240
+# Community area shapes and place labels
+CITY_FILL_COLOR = "#F1F3F5"
+CITY_OUTLINE_COLOR = "#B8C0C8"
+CITY_OUTLINE_WIDTH = 0.6
+LABEL_FONT_SIZE = 11
+LABEL_OFFSET = -1  # Pixels; lifts each label slightly above its point
 
-DOT_SIZE_RANGE = [3, 45]
+# Place labels as (text, longitude, latitude, alignment).
+MAP_LABELS = [
+    ("← Loop", -87.590, 41.879, "left"),
+    ("← Near North Side", -87.590, 41.899, "left"),
+    ("Near West Side →", -87.682, 41.869, "right"),
+    ("Austin", -87.774, 41.894, "right"),
+    ("Kenwood", -87.595, 41.815, "left"),
+    ("South Shore", -87.563, 41.771, "left"),
+]
 
-
-def calculate_view_bounds(center, scale, width, height):
-    """
-    Work out the longitude and latitude edges a Mercator view shows.
-
-    Inputs: center as [longitude, latitude] in degrees, the projection
-        scale (pixels per radian), and the view size in pixels.
-    Output: a tuple (west, south, east, north) in degrees.
-    """
-    longitude, latitude = center
-    half_span = math.degrees((width / 2) / scale)
-    center_y = math.log(math.tan(math.pi / 4 + math.radians(latitude) / 2))
-
-    def latitude_at(offset_pixels):
-        y = center_y + offset_pixels / scale
-        return math.degrees(2 * math.atan(math.exp(y)) - math.pi / 2)
-
-    return (
-        longitude - half_span,
-        latitude_at(-height / 2),
-        longitude + half_span,
-        latitude_at(height / 2),
-    )
-
-
-# Area covered by the close-up and outlined on the full map
-INSET_BOUNDS = calculate_view_bounds(
-    INSET_CENTER, INSET_SCALE, INSET_WIDTH, INSET_HEIGHT
-)
+# Bubble map: one circle per community area. Size is the number of reporting
+# buildings and color is the share of rated buildings with 1 star.
+MIN_AREA_BUILDINGS = 25  # Areas with fewer buildings are drawn in gray
+BUBBLE_MAX_BUILDINGS = 500  # Building count at the top of the size scale
+BUBBLE_MAX_SIZE = 1800  # Circle area (square pixels) at that count
+BUBBLE_LEGEND_COUNTS = [10, 50, 100, 250, 500]
+BUBBLE_OPACITY = 0.9
+BUBBLE_OUTLINE_COLOR = "white"
+BUBBLE_OUTLINE_WIDTH = 0.8
+# Color runs from light blue (low share of poorly rated buildings) through a
+# pale neutral at the citywide share to red (high share)
+SHARE_SCALE_MIN = 0.08  # Poorly rated share at the bluest color
+SHARE_SCALE_MAX = 0.30  # Poorly rated share at the reddest color
+SHARE_LOW_COLOR = "#3F9AD6"
+SHARE_MID_COLOR = "#E3CBD3"
+SMALL_AREA_COLOR = "#8D99AE"
+SMALL_AREA_OUTLINE_WIDTH = 1
 
 
-def make_city_layer(clip=False):
+def make_city_layer():
     """
     Build the light community-area shapes that outline the city.
 
-    Inputs: clip, True to cut shapes off at the edge of the view.
+    Inputs: none (uses CHI_GJ).
     Output: an Altair geoshape chart.
     """
     return alt.Chart(alt.Data(values=CHI_GJ["features"])).mark_geoshape(
-        fill="#F1F3F5", stroke="#B8C0C8", strokeWidth=0.6, clip=clip
+        fill=CITY_FILL_COLOR,
+        stroke=CITY_OUTLINE_COLOR,
+        strokeWidth=CITY_OUTLINE_WIDTH,
+        clip=False,
     )
 
 
-def make_bounds_layer():
+def make_label_layer():
     """
-    Build a dashed rectangle marking the area shown in the close-up map.
+    Build the place labels to sit in empty space.
 
-    Inputs: none (uses INSET_BOUNDS).
-    Output: an Altair geoshape chart.
+    Inputs: none (uses MAP_LABELS).
+    Output: an Altair text chart layered on the map.
     """
-    west, south, east, north = INSET_BOUNDS
-    box = {
-        "type": "Feature",
-        "geometry": {
-            "type": "Polygon",
-            "coordinates": [
-                [
-                    [west, south],
-                    [east, south],
-                    [east, north],
-                    [west, north],
-                    [west, south],
-                ]
-            ],
-        },
-    }
-    return alt.Chart(alt.Data(values=[box])).mark_geoshape(
-        fill=None, stroke=INK, strokeWidth=1.2, strokeDash=[5, 3]
+    labels = pd.DataFrame(
+        MAP_LABELS, columns=["text", "longitude", "latitude", "align"]
     )
-
-
-def make_dot_layer(data, size_domain, show_legend=True, clip=False):
-    """
-    Build the building dots, sized by emissions and colored by rating.
-
-    Inputs: a DataFrame of rated buildings; size_domain, the
-        [smallest, largest] emissions used to scale dot sizes (shared by
-        both maps so dots match); show_legend, False to hide the legends;
-        and clip, True to hide dots that fall outside the view.
-    Output: an Altair circle chart.
-    """
-    size_legend = None
-    color_legend = None
-    if show_legend:
-        size_legend = alt.Legend()
-        color_legend = alt.Legend()
-    return (
-        alt.Chart(data)
-        .mark_circle(opacity=0.9, stroke=INK, strokeWidth=0.3, clip=clip)
-        .encode(
-            longitude="longitude:Q",
-            latitude="latitude:Q",
-            size=alt.Size(
-                f"{GHG_TOTAL}:Q",
-                scale=alt.Scale(
-                    domain=size_domain, range=DOT_SIZE_RANGE, type="sqrt"
-                ),
-                title=["Greenhouse gas", "emissions", "(tons per year)"],
-                legend=size_legend,
-            ),
-            color=alt.Color(
-                "chicago_energy_rating:O",
-                title="Energy rating (stars)",
-                scale=STAR_SCALE,
-                legend=color_legend,
-            ),
-            # Draw the largest dots first so small ones are not hidden
-            order=alt.Order(f"{GHG_TOTAL}:Q", sort="descending"),
+    layers = [
+        alt.Chart(labels[labels["align"] == align])
+        .mark_text(
+            align=align, fontSize=LABEL_FONT_SIZE, color=MUTED, dy=LABEL_OFFSET
         )
+        .encode(longitude="longitude:Q", latitude="latitude:Q", text="text:N")
+        for align in ("left", "right")
+    ]
+    return alt.layer(*layers)
+
+
+def calculate_ring_center(ring):
+    """
+    Find the center and the area of a polygon ring, from its corner points.
+
+    Inputs: a list of [longitude, latitude] points that closes on itself.
+    Output: a tuple of (longitude, latitude, area) of the ring.
+    """
+    points = np.array(ring)
+    x, y = points[:-1, 0], points[:-1, 1]
+    next_x, next_y = points[1:, 0], points[1:, 1]
+    cross = x * next_y - next_x * y
+    area = cross.sum() / 2
+    center_x = ((x + next_x) * cross).sum() / (6 * area)
+    center_y = ((y + next_y) * cross).sum() / (6 * area)
+    return center_x, center_y, abs(area)
+
+
+def calculate_area_centers(geojson):
+    """
+    Find a point in the middle of each community area, from the center of its
+    largest polygon.
+
+    Inputs: the community area GeoJSON.
+    Output: a DataFrame with "community_area" (title case, matching the
+        benchmarking data), "longitude" and "latitude".
+    """
+    rows = []
+    for feature in geojson["features"]:
+        geometry = feature["geometry"]
+        polygons = (
+            geometry["coordinates"]
+            if geometry["type"] == "MultiPolygon"
+            else [geometry["coordinates"]]
+        )
+        centers = [calculate_ring_center(polygon[0]) for polygon in polygons]
+        longitude, latitude, _ = max(centers, key=lambda center: center[2])
+        rows.append(
+            {
+                "community_area": feature["properties"]["community"].title(),
+                "longitude": longitude,
+                "latitude": latitude,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def summarize_community_areas(df):
+    """
+    Count the reporting buildings in each community area, and the share of
+    the rated ones that are poorly rated (1 star).
+
+    Inputs: latest-year DataFrame of reporting buildings.
+    Output: a DataFrame with one row per community area: "community_area",
+        "buildings", "rated", "poor", "poor_share", "longitude", "latitude",
+        and "is_small" (True when there are too few buildings to compare).
+    Errors: raises ValueError if an area has no position on the map.
+    """
+    rating = df["chicago_energy_rating"]
+    counts = pd.DataFrame(
+        {
+            "community_area": df["community_area"],
+            "rated": rating > 0,
+            "poor": rating == POOR_RATING,
+        }
     )
+    areas = counts.groupby("community_area").agg(
+        buildings=("rated", "size"),
+        rated=("rated", "sum"),
+        poor=("poor", "sum"),
+    )
+    areas = areas.reset_index().merge(
+        calculate_area_centers(CHI_GJ), on="community_area", how="left"
+    )
+    unplaced = areas.loc[areas["longitude"].isna(), "community_area"]
+    if not unplaced.empty:
+        raise ValueError(f"No map position for: {', '.join(unplaced)}")
+    areas["poor_share"] = areas["poor"] / areas["rated"]
+    areas["is_small"] = areas["buildings"] < MIN_AREA_BUILDINGS
+    return areas
 
 
-def select_rated_buildings(df):
+def make_bubble_map(df):
     """
-    Keep buildings that have a star rating (unrated ones have no color).
+    Map the reporting buildings by community area: circle size shows how many
+    buildings there are, and color shows the share that are poorly rated.
+    Areas with few buildings are hollow gray circles because their shares
+    are not reliable.
 
-    Inputs: a DataFrame with a "chicago_energy_rating" column.
-    Output: the filtered DataFrame.
-    """
-    return df.dropna(subset=["chicago_energy_rating"])
-
-
-def get_emissions_range(d):
-    """
-    Find the smallest and largest emissions, used to scale dot sizes the
-    same way on both maps.
-
-    Inputs: a DataFrame with the total emissions column.
-    Output: a list [smallest, largest] in metric tons CO2e.
-    """
-    return [d[GHG_TOTAL].min(), d[GHG_TOTAL].max()]
-
-
-def building_dot_map(df):
-    """
-    Map every rated building.
-
-    Inputs: latest-year DataFrame (top property types).
+    Inputs: latest-year DataFrame of reporting buildings.
     Output: an Altair chart.
     """
-    d = select_rated_buildings(df)
-    size_domain = get_emissions_range(d)
-    return (
-        (
-            make_city_layer()
-            + make_bounds_layer()
-            + make_dot_layer(d, size_domain)
+    areas = summarize_community_areas(df)
+    city_share = areas["poor"].sum() / areas["rated"].sum()
+    size_scale = alt.Scale(
+        domain=[0, BUBBLE_MAX_BUILDINGS], range=[0, BUBBLE_MAX_SIZE], clamp=True
+    )
+    # Both kinds of circle sit at the area's center, and the largest are
+    # drawn first so the small ones are not hidden
+    position = dict(longitude="longitude:Q", latitude="latitude:Q")
+    draw_order = alt.Order("buildings:Q", sort="descending")
+    circle_style = dict(
+        opacity=BUBBLE_OPACITY,
+        stroke=BUBBLE_OUTLINE_COLOR,
+        strokeWidth=BUBBLE_OUTLINE_WIDTH,
+    )
+    shaded = (
+        alt.Chart(areas[~areas["is_small"]])
+        .mark_circle(**circle_style)
+        .encode(
+            **position,
+            size=alt.Size(
+                "buildings:Q",
+                scale=size_scale,
+                legend=alt.Legend(
+                    title="Reporting buildings", values=BUBBLE_LEGEND_COUNTS
+                ),
+            ),
+            color=alt.Color(
+                "poor_share:Q",
+                scale=alt.Scale(
+                    domain=[SHARE_SCALE_MIN, city_share, SHARE_SCALE_MAX],
+                    range=[SHARE_LOW_COLOR, SHARE_MID_COLOR, POOR_RATING_COLOR],
+                    interpolate="lab",
+                    clamp=True,
+                ),
+                legend=alt.Legend(title="Poorly rated (1 star)", format=".0%"),
+            ),
+            order=draw_order,
         )
+    )
+    small = (
+        alt.Chart(areas[areas["is_small"]])
+        .mark_point(
+            shape="circle",
+            filled=False,
+            color=SMALL_AREA_COLOR,
+            strokeWidth=SMALL_AREA_OUTLINE_WIDTH,
+        )
+        .encode(
+            **position,
+            size=alt.Size("buildings:Q", scale=size_scale, legend=None),
+            order=draw_order,
+        )
+    )
+    return (
+        (make_city_layer() + shaded + small + make_label_layer())
         .project("mercator", center=MAP_CENTER, scale=MAP_SCALE)
         .properties(
             width=MAP_WIDTH,
             height=MAP_HEIGHT,
             title=alt.TitleParams(
-                "Chicago's biggest emitters cluster downtown",
+                f"Reporting buildings by community area ({LATEST_YEAR})",
                 subtitle=[
-                    "Each dot is a building: size shows emissions, color shows",
-                    "its Chicago Energy Rating (0-4 stars, 4 is best).",
+                    "Circle size: number of reporting buildings. Color: share "
+                    "of rated buildings",
+                    f"with 1 star, bluer below the citywide {city_share:.0%} "
+                    "and redder above.",
+                    f"Hollow gray: fewer than {MIN_AREA_BUILDINGS} buildings, "
+                    "too few to compare.",
                 ],
                 anchor="start",
             ),
@@ -497,37 +569,7 @@ def building_dot_map(df):
     )
 
 
-def building_downtown_closeup(df):
-    """
-    Zoomed map of the downtown area outlined on the full map. It has no
-    legend or title, so it can be placed over the full map in Inkscape.
-
-    Inputs: latest-year DataFrame (top property types).
-    Output: an Altair chart with a dashed frame matching the outline box.
-    """
-    d = select_rated_buildings(df)
-    size_domain = get_emissions_range(d)
-    west, south, east, north = INSET_BOUNDS
-    downtown = d[
-        d["longitude"].between(west, east) & d["latitude"].between(south, north)
-    ]
-    return (
-        (
-            make_city_layer(clip=True)
-            + make_dot_layer(
-                downtown, size_domain, show_legend=False, clip=True
-            )
-        )
-        .project("mercator", center=INSET_CENTER, scale=INSET_SCALE)
-        .properties(width=INSET_WIDTH, height=INSET_HEIGHT)
-        .configure_view(stroke=INK, strokeWidth=1.2, strokeDash=[5, 3])
-    )
-
-
-save_chart(building_dot_map(latest_top), "2_building_dot_map", svg=True)
-save_chart(
-    building_downtown_closeup(latest_top), "2_downtown_closeup", svg=True
-)
+save_chart(make_bubble_map(latest), "2_building_bubble_map")
 
 
 # =============================================================================

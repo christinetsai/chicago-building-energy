@@ -1,9 +1,8 @@
 """
 theme.py
 
-Shared visual theme for every chart: the color palette, the color scales
-for star ratings and fuels, and the Altair theme (fonts, axes, legends,
-and titles).
+Shared visual theme for every chart: the color palette, the color scale
+for fuels, and the Altair theme (fonts, axes, legends, and titles).
 
 Usage: call apply_theme() once before building any chart
 """
@@ -19,21 +18,11 @@ FLAME = "#F2792B"
 GREEN = "#2E9E6B"
 GRAY = "#8D99AE"
 CHARCOAL = "#4A5568"
+
+# Poorly rated buildings (1 star) use this red on the map and the priority chart
+POOR_RATING_COLOR = STAR_RED
 INK, MUTED, GRID = "#1B2A3A", "#6B7785", "#E6E9ED"
 
-STAR_SCALE = alt.Scale(
-    domain=[0.0, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
-    range=[
-        "#8F0020",
-        "#E4002B",
-        "#EE7078",
-        "#F2979E",
-        "#A0D3EE",
-        "#79C8EE",
-        "#41B6E6",
-        "#1C7FB5",
-    ],
-)
 FUEL_SCALE = alt.Scale(
     domain=[
         "Natural gas",

@@ -35,6 +35,9 @@ GEOJSON_URL = "https://data.cityofchicago.org/resource/igwz-8jzy.geojson"
 # which have only 5 buildings)
 TOP_N_TYPES = 24
 
+# Star rating that counts as poorly rated.
+POOR_RATING = 1
+
 # Unit conversions
 MILLION = 1_000_000
 THOUSAND = 1_000
