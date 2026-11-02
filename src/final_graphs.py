@@ -902,18 +902,71 @@ save_chart(fuel_mix(latest_top), "5_fuel_mix")
 # =============================================================================
 
 
+# Column with each building's floor area
+AREA_COLUMN = "gross_floor_area_buildings_sq_ft_"
+LABEL_NUDGE = 9  # Pixels between the end labels of lines that nearly overlap
+# A paler red than the emissions line
+HYPOTHETICAL_EMISSIONS_COLOR = "#EE8B98"
+
+
+def estimate_emission_factors(d):
+    """
+    Estimate how many kilograms of CO2e each kBtu of each fuel produces, from
+    the buildings' own fuel use and reported emissions. This is a least
+    squares fit through the origin. A fuel whose fitted factor would be
+    negative is dropped and the fit is repeated.
+
+    Inputs: a DataFrame of buildings from one year, with the fuel columns
+        (see FUEL_COLS) and total emissions in metric tons.
+    Output: a Series of factors (kg CO2e per kBtu), indexed by fuel column.
+    """
+    d = d.dropna(subset=[GHG_TOTAL])
+    use = d[list(FUEL_COLS)].fillna(0)
+    emitted_kg = d[GHG_TOTAL] * THOUSAND
+    fuels = list(FUEL_COLS)
+    while True:
+        factors, *_ = np.linalg.lstsq(
+            use[fuels].values, emitted_kg.values, rcond=None
+        )
+        negative = [f for f, x in zip(fuels, factors) if x < 0]
+        if not negative:
+            break
+        fuels = [f for f in fuels if f not in negative]
+    factors = pd.Series(factors, index=fuels)
+    return factors.reindex(list(FUEL_COLS), fill_value=0)
+
+
+def calculate_fixed_factor_intensity(d, start):
+    """
+    Emissions per square foot for every building and year if each fuel had
+    kept its emission factor from the first year. Any change in this measure
+    comes from the buildings' energy use or fuel mix, not from the grid.
+
+    Inputs: a DataFrame of the buildings in every year, and the first year.
+    Output: a DataFrame of emissions per square foot, with one row per
+        building and one column per year.
+    """
+    factors = estimate_emission_factors(d[d["data_year"] == start])
+    use = d[list(FUEL_COLS)].fillna(0)
+    intensity = (use * factors).sum(axis=1) / d[AREA_COLUMN]
+    return intensity.groupby([d["id"], d["data_year"]]).first().unstack()
+
+
 def same_building_trend(df, start=2018, end=2023):
     """
     Line chart of how the median building's energy use and emissions
     changed, for the buildings that reported every year. Each building is
     compared with its own value in the first year, and the line shows the
-    median of those percentages.
+    median of those percentages. A dashed line shows what emissions would
+    have been if the emission factors had stayed at their first-year level,
+    which separates a cleaner grid from changes in the buildings.
 
     Inputs: all-years DataFrame, and the first and last year to show.
     Output: an Altair chart.
     """
     energy = "Energy used per square foot"
     emissions = "Emissions per square foot"
+    fixed = "Emissions with the grid at its 2018 level"
     metrics = {
         "site_eui_kbtu_sq_ft_": energy,
         GHG_INTENSITY: emissions,
@@ -931,15 +984,19 @@ def same_building_trend(df, start=2018, end=2023):
             for column, name in metrics.items()
         }
     )
-
-    # Change from the first to the last year, for the subtitle
-    energy_change = trend.loc[end, energy] / 100 - 1
-    emissions_change = trend.loc[end, emissions] / 100 - 1
+    held = calculate_fixed_factor_intensity(d[d["id"].isin(ids)], start)
+    held = held.where(held[start] > 0)
+    trend[fixed] = (held.div(held[start], axis=0) * 100).median()
 
     trend = trend.reset_index().melt(
         "data_year", var_name="measure", value_name="index"
     )
 
+    # One legend for color and dashes, with line symbols so the hypothetical
+    # line shows as dashes
+    legend = alt.Legend(
+        orient="top", columns=1, labelLimit=400, symbolType="stroke"
+    )
     base = alt.Chart(trend).encode(
         x=alt.X("data_year:O", title="Year", axis=alt.Axis(labelAngle=0)),
         y=alt.Y(
@@ -951,9 +1008,18 @@ def same_building_trend(df, start=2018, end=2023):
             "measure:N",
             title=None,
             scale=alt.Scale(
-                domain=[energy, emissions],
-                range=[DEEP_BLUE, STAR_RED],
+                domain=[energy, emissions, fixed],
+                range=[DEEP_BLUE, STAR_RED, HYPOTHETICAL_EMISSIONS_COLOR],
             ),
+            legend=legend,
+        ),
+        strokeDash=alt.StrokeDash(
+            "measure:N",
+            scale=alt.Scale(
+                domain=[energy, emissions, fixed],
+                range=[[1, 0], [1, 0], [6, 4]],
+            ),
+            legend=legend,
         ),
     )
     lines = base.mark_line(point=True, strokeWidth=3).encode(
@@ -963,10 +1029,18 @@ def same_building_trend(df, start=2018, end=2023):
             alt.Tooltip("index:Q", title="Index", format=".1f"),
         ]
     )
-    labels = (
-        base.transform_filter(alt.datum.data_year == end)
-        .mark_text(align="left", dx=8, fontSize=12)
-        .encode(text=alt.Text("index:Q", format=".0f"))
+    # End-of-line numbers. Make sure the energy and hypothetical emissions
+    # lines are not on top of each other.
+    label_offsets = {energy: LABEL_NUDGE, emissions: 0, fixed: -LABEL_NUDGE}
+    labels = alt.layer(
+        *[
+            base.transform_filter(
+                (alt.datum.data_year == end) & (alt.datum.measure == measure)
+            )
+            .mark_text(align="left", dx=8, dy=offset, fontSize=12)
+            .encode(text=alt.Text("index:Q", format=".0f"))
+            for measure, offset in label_offsets.items()
+        ]
     )
     ref = (
         alt.Chart(pd.DataFrame({"y": [100]}))
@@ -978,10 +1052,12 @@ def same_building_trend(df, start=2018, end=2023):
         height=LINE_CHART_HEIGHT,
         title=alt.TitleParams(
             f"The same {len(ids):,} buildings from {start}–{end}",
-            subtitle=(
-                f"Emissions per square foot fell {abs(emissions_change):.0%} "
-                f"while energy use fell {abs(energy_change):.0%}."
-            ),
+            subtitle=[
+                "The median building's energy use and emissions per square "
+                f"foot, each as a percent of its own {start} level.",
+                "The dashed line shows emissions if the grid had stayed at its"
+                f" {start} level.",
+            ],
             anchor="start",
         ),
     )
