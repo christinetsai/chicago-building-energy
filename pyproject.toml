@@ -1,7 +1,7 @@
 [project]
 name = "chicago-building-energy"
 version = "0.1.0"
-description = "Add your description here"
+description = "Analysis of Chicago building energy use and emissions"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
