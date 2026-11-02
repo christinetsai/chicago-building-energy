@@ -189,18 +189,21 @@ SECTOR_CSV = DATA_DIR / "chicago_emissions_by_sector_2019.csv"
 REPORTING_ROW = "Large reporting buildings (2023)"
 # A single space reserves an empty band that separates the 2023 row
 SPACER_ROW = " "
+# Sector rows, largest first
 ROW_LABELS = {
-    "Buildings & stationary energy": "Buildings & industry (2019)",
+    "Buildings": "Buildings (2019)",
     "Transportation": "Transportation (2019)",
+    "Industry & other": "Industry & other (2019)",
     "Waste": "Waste (2019)",
 }
 ROW_ORDER = [*ROW_LABELS.values(), SPACER_ROW, REPORTING_ROW]
 
-# Subsector stack order and colors: blues are buildings, grays are other
+# Subsector stack order and colors: blues are buildings, teal is industry,
+# grays are other
 SUBSECTOR_COLORS = {
     "Commercial & institutional": "#1C5F8A",
     "Residential buildings": "#2F86BE",
-    "Industry & other": "#A8D0E6",
+    "Industry & other": "#5BA4A4",
     "On-road vehicles": "#4A5568",
     "Other": "#9AA5B4",
     "Waste": "#C9CED6",
@@ -209,7 +212,7 @@ SUBSECTOR_COLORS = {
 SUBSECTOR_ORDER = list(SUBSECTOR_COLORS)
 
 SECTOR_CHART_WIDTH = 500
-SECTOR_CHART_HEIGHT = 240
+SECTOR_CHART_HEIGHT = 290
 SECTOR_AXIS_MAX = 24  # Million tons; leaves room for the total labels
 MIN_LABELED_SEGMENT = 3.0  # Smallest segment (million tons) given a label
 
@@ -247,7 +250,7 @@ def make_sector_chart(df):
 
     # Row totals, shown just past the end of each bar
     totals = rows.groupby("row", as_index=False)[SECTOR_VALUE].sum()
-    totals["label"] = totals[SECTOR_VALUE].map("{:.1f}M tons".format)
+    totals["label"] = totals[SECTOR_VALUE].map("{:.2f}M tons".format)
 
     # Only label segments that are wide enough to hold a number
     labeled_segments = rows[rows[SECTOR_VALUE] >= MIN_LABELED_SEGMENT]
@@ -286,7 +289,7 @@ def make_sector_chart(df):
         .encode(
             y=y_rows,
             x=alt.X("segment_middle:Q"),
-            text=alt.Text(f"{SECTOR_VALUE}:Q", format=".1f"),
+            text=alt.Text(f"{SECTOR_VALUE}:Q", format=".2f"),
         )
     )
     total_labels = (
@@ -299,11 +302,11 @@ def make_sector_chart(df):
         width=SECTOR_CHART_WIDTH,
         height=SECTOR_CHART_HEIGHT,
         title=alt.TitleParams(
-            "Buildings are Chicago's biggest source of emissions",
-            subtitle=[
-                "Citywide figures are for 2019 (CMAP). The bottom bar is 2023",
-                "data for large buildings that reported to the city.",
-            ],
+            "Chicago's greenhouse gas emissions by sector",
+            subtitle=(
+                "Citywide figures are for 2019 (CMAP). The bottom bar is 2023 "
+                "data for large buildings that reported to the city."
+            ),
             anchor="start",
         ),
     )
