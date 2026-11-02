@@ -31,10 +31,6 @@ SECTOR_VALUE = "million_metric_tons_co2e"
 # Chicago community areas geojson
 GEOJSON_URL = "https://data.cityofchicago.org/resource/igwz-8jzy.geojson"
 
-# Keep the 24 most common property types (this includes data centers,
-# which have only 5 buildings)
-TOP_N_TYPES = 24
-
 # Star rating that counts as poorly rated.
 POOR_RATING = 1
 
@@ -42,9 +38,8 @@ POOR_RATING = 1
 MILLION = 1_000_000
 THOUSAND = 1_000
 
-# Panel charts: row height (pixels) and gap between panels
+# Row height (pixels) of the box plot
 PANEL_ROW_HEIGHT = 22
-PANEL_SPACING = 14
 
 # Shared chart size (pixels) and sizes for charts that differ
 CHART_WIDTH = 500

@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 import numpy as np
 
-from categories import CATEGORY_ORDER, SHORT_TYPE_NAMES, add_category_column
+from categories import SHORT_TYPE_NAMES, add_category_column
 from constants import (
     CHART_HEIGHT,
     CHART_WIDTH,
@@ -28,13 +28,11 @@ from constants import (
     MILLION,
     OUTPUT_DIR,
     PANEL_ROW_HEIGHT,
-    PANEL_SPACING,
     POOR_RATING,
     PRIORITY_HEIGHT,
     PRIORITY_WIDTH,
     SECTOR_VALUE,
     THOUSAND,
-    TOP_N_TYPES,
 )
 from theme import (
     AMBER,
@@ -73,29 +71,6 @@ def save_chart(chart, name, scale_factor=1.0, svg=False):
     chart.save(OUTPUT_DIR / f"{name}.png", scale_factor=scale_factor)
     if svg:
         chart.save(OUTPUT_DIR / f"{name}.svg")
-
-
-def make_category_row():
-    """
-    Build the row facet that splits a chart into one panel per building
-    category, in CATEGORY_ORDER, with a bold heading above each panel.
-
-    Inputs: none.
-    Output: an Altair Row facet on the "category" column.
-    """
-    return alt.Row(
-        "category:N",
-        sort=CATEGORY_ORDER,
-        title=None,
-        header=alt.Header(
-            labelAngle=0,
-            labelAlign="left",
-            labelOrient="top",
-            labelFontSize=14,
-            labelFontWeight="bold",
-            labelPadding=4,
-        ),
-    )
 
 
 # =============================================================================
@@ -173,19 +148,12 @@ def load_chicago_geojson(path=DATA_DIR / "chicago_community_areas.geojson"):
 
 CHI_GJ = load_chicago_geojson()
 
-# Get dataset with top types from the latest year
-# Each property can show up multiple times for each report year. Grab records from the latest year
+# Each property can show up multiple times, once for each report year, so
+# keep the records from the latest year
 ALL_YEARS = load_chicago_benchmarks()
 LATEST_YEAR = ALL_YEARS["data_year"].max()
 latest = ALL_YEARS[ALL_YEARS["data_year"] == LATEST_YEAR].copy()
 
-top_types = (
-    latest["primary_property_type"]
-    .value_counts()
-    .head(TOP_N_TYPES)
-    .index.tolist()
-)
-latest_top = latest[latest["primary_property_type"].isin(top_types)]
 
 
 # =============================================================================
@@ -744,31 +712,49 @@ save_chart(emissions_by_type_bar_chart(latest), "3_emissions_by_type")
 # Chart 4: Emissions per square foot by property type (box plot)
 # =============================================================================
 
-
-# Box thickness (pixels)
-BOX_THICKNESS = 12
+# Types shown: the largest by total emissions, plus any type with enough
+# buildings that is much more intense than the city as a whole
+BOX_LARGEST_TYPES = 7
+MIN_INTENSE_BUILDINGS = 5
+INTENSE_MULTIPLE = 3  # Intense: median at least this times the city's
+BOX_THICKNESS = 14  # Pixels
+BOX_OTHER_COLOR = "#A9B8C8"
+BOX_WHISKER_REACH = 1.5  # Whiskers stop within this many box lengths
+MEDIAN_LINE_COLOR = "white"
+MEDIAN_LINE_WIDTH = 2
+REFERENCE_LINE_WIDTH = 1.5
+REFERENCE_LINE_DASH = [5, 4]
+REFERENCE_LABEL_SIZE = 12
 
 
 def emissions_by_type_box_plot(df):
     """
-    Box plot of emissions per square foot within each property type, with
-    one panel per building category.
+    Box plot of emissions per square foot for the BOX_LARGEST_TYPES types
+    with the most total emissions, plus the intense types (median at least
+    INTENSE_MULTIPLE times the city's, with MIN_INTENSE_BUILDINGS or more
+    buildings). Types are sorted by median, and the intense ones are dark.
+    A dashed line marks the city's median. Outliers are not shown.
 
-    Panels follow CATEGORY_ORDER, and types are sorted by median within
-    each panel. The sort order is worked out here because Altair ignores a
-    median sort on box plots. Each label shows the number of buildings.
-
-    Inputs: latest-year DataFrame (top property types).
+    Inputs: latest-year DataFrame of reporting buildings.
     Output: an Altair chart.
     """
-    d = df.dropna(subset=[GHG_INTENSITY])
-    type_stats = (
-        d.groupby("type_label", observed=True)[GHG_INTENSITY]
-        .agg(median="median", buildings="count")
-        .reset_index()
+    city_median = df[GHG_INTENSITY].median()
+    type_stats = df.groupby("type_label", observed=True).agg(
+        total=(GHG_TOTAL, "sum"),
+        median=(GHG_INTENSITY, "median"),
+        buildings=(GHG_INTENSITY, "count"),
     )
+    type_stats["intense"] = (
+        type_stats["median"] >= INTENSE_MULTIPLE * city_median
+    )
+    largest = type_stats["total"].nlargest(BOX_LARGEST_TYPES).index
+    intense = type_stats.index[
+        type_stats["intense"]
+        & (type_stats["buildings"] >= MIN_INTENSE_BUILDINGS)
+    ]
+    type_stats = type_stats.loc[largest.union(intense)]
     type_stats["axis_label"] = (
-        type_stats["type_label"]
+        type_stats.index.astype(str)
         + " ("
         + type_stats["buildings"].map("{:,}".format)
         + ")"
@@ -776,40 +762,85 @@ def emissions_by_type_box_plot(df):
     type_order = type_stats.sort_values("median", ascending=False)[
         "axis_label"
     ].tolist()
-    d = d.merge(type_stats[["type_label", "axis_label"]], on="type_label")
 
-    return (
+    d = df[df["type_label"].isin(type_stats.index)].dropna(
+        subset=[GHG_INTENSITY]
+    )
+    d = d.assign(
+        axis_label=d["type_label"].map(type_stats["axis_label"]),
+        intense=d["type_label"].map(type_stats["intense"]),
+    )
+
+    boxes = (
         alt.Chart(d)
-        .mark_boxplot(extent=1.5, size=BOX_THICKNESS)
+        .mark_boxplot(
+            extent=BOX_WHISKER_REACH,
+            size=BOX_THICKNESS,
+            outliers=False,
+            median=alt.MarkConfig(
+                color=MEDIAN_LINE_COLOR, strokeWidth=MEDIAN_LINE_WIDTH
+            ),
+            rule=alt.MarkConfig(color=MUTED),
+        )
         .encode(
             x=alt.X(
                 f"{GHG_INTENSITY}:Q",
                 title="Emissions per square foot (kg CO2e / sq ft)",
             ),
             y=alt.Y("axis_label:N", title=None, sort=type_order),
-            color=alt.value(FLAG_BLUE),
+            color=alt.Color(
+                "intense:N",
+                scale=alt.Scale(
+                    domain=[True, False],
+                    range=[HIGHLIGHT_BAR_COLOR, BOX_OTHER_COLOR],
+                ),
+                legend=None,
+            ),
         )
-        .properties(width=CHART_WIDTH, height=alt.Step(PANEL_ROW_HEIGHT))
-        .facet(
-            row=make_category_row(),
-            spacing=PANEL_SPACING,
+    )
+    reference = pd.DataFrame(
+        {
+            "x": [city_median],
+            "label": [f"All buildings: median {city_median:.1f}"],
+        }
+    )
+    reference_line = (
+        alt.Chart(reference)
+        .mark_rule(
+            color=MUTED,
+            strokeWidth=REFERENCE_LINE_WIDTH,
+            strokeDash=REFERENCE_LINE_DASH,
         )
-        .resolve_scale(y="independent")
-        .properties(
-            title=alt.TitleParams(
-                "Variation in emissions per square foot by building type",
-                subtitle=[
-                    "Each box spans the middle half of buildings of that type;",
-                    f"the white line is the median ({LATEST_YEAR}).",
-                    "Number of buildings in parentheses.",
-                ],
-                anchor="start",
-            )
+        .encode(x="x:Q")
+    )
+    reference_label = (
+        alt.Chart(reference)
+        .mark_text(
+            align="left",
+            baseline="bottom",
+            dx=4,
+            fontSize=REFERENCE_LABEL_SIZE,
+            color=MUTED,
         )
+        .encode(x="x:Q", y=alt.value(0), text="label:N")
+    )
+    return (reference_line + boxes + reference_label).properties(
+        width=CHART_WIDTH,
+        height=alt.Step(PANEL_ROW_HEIGHT),
+        title=alt.TitleParams(
+            f"Emissions per square foot by property type ({LATEST_YEAR})",
+            subtitle=[
+                "Boxes show the middle half of buildings; the white line is "
+                "the median.",
+                f"Dark boxes: median at least {INTENSE_MULTIPLE} times the "
+                "median of all buildings. Number of buildings in parentheses.",
+            ],
+            anchor="start",
+        ),
     )
 
 
-save_chart(emissions_by_type_box_plot(latest_top), "4_emissions_type_box")
+save_chart(emissions_by_type_box_plot(latest), "4_emissions_type_box")
 
 
 # =============================================================================
