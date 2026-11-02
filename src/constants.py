@@ -43,6 +43,13 @@ THOUSAND = 1_000
 # Row height (pixels) of the box plot
 PANEL_ROW_HEIGHT = 22
 
+# Sizes shared by the charts (pixels, unless noted)
+LABEL_FONT_SIZE = 12
+LABEL_GAP = 4  # Space between a mark and its label
+LINE_WIDTH = 3
+REFERENCE_DASH = [4, 4]  # Dash pattern of a reference line
+DOWNLOAD_TIMEOUT = 30  # Seconds to wait for a download
+
 # Shared chart size (pixels) and sizes for charts that differ
 CHART_WIDTH = 500
 CHART_HEIGHT = 380

@@ -25,24 +25,29 @@ from constants import (
     FUEL_COLS,
     GEOJSON_URL,
     GHG_INTENSITY,
+    DOWNLOAD_TIMEOUT,
     GHG_TOTAL,
+    LABEL_FONT_SIZE,
+    LABEL_GAP,
     LINE_CHART_HEIGHT,
+    LINE_WIDTH,
     MILLION,
     OUTPUT_DIR,
     PANEL_ROW_HEIGHT,
-    POOR_RATING,
     PRIORITY_HEIGHT,
     PRIORITY_WIDTH,
+    REFERENCE_DASH,
+    POOR_RATING,
     SECTOR_VALUE,
     THOUSAND,
 )
 from theme import (
     AMBER,
-    CHARCOAL,
     DEEP_BLUE,
     FLAG_BLUE,
     FLAME,
     GRAY,
+    GRID,
     INK,
     MUTED,
     POOR_RATING_COLOR,
@@ -62,17 +67,15 @@ alt.data_transformers.disable_max_rows()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def save_chart(chart, name, scale_factor=1.0, svg=False):
+def save_chart(chart, name, scale_factor=1.0):
     """
-    Save a chart as a PNG in the output folder and optionally as an SVG.
+    Save a chart as a PNG in the output folder.
 
-    Inputs: an Altair chart, a file name without extension, the PNG
-        resolution multiplier, and svg (True to also save an SVG).
-    Output: none (writes one or two files).
+    Inputs: an Altair chart, a file name without extension, and the PNG
+        resolution multiplier.
+    Output: none (writes one file).
     """
     chart.save(OUTPUT_DIR / f"{name}.png", scale_factor=scale_factor)
-    if svg:
-        chart.save(OUTPUT_DIR / f"{name}.svg")
 
 
 # =============================================================================
@@ -99,9 +102,7 @@ def load_chicago_benchmarks():
     # normalize community area names, including spelling differences such as
     # O'Hare and Ohare
     clean_df["community_area"] = (
-        clean_df["community_area"]
-        .str.replace("'", "", regex=False)
-        .str.title()
+        clean_df["community_area"].str.replace("'", "", regex=False).str.title()
     )
     # Two types of reporting status are used for submitted building
     clean_df = clean_df[
@@ -136,7 +137,7 @@ def load_chicago_geojson(path=DATA_DIR / "chicago_community_areas.geojson"):
     path = Path(path)
     if path.exists():
         return json.loads(path.read_text())
-    r = requests.get(GEOJSON_URL, timeout=30)
+    r = requests.get(GEOJSON_URL, timeout=DOWNLOAD_TIMEOUT)
     r.raise_for_status()
     gj = r.json()
     if "features" not in gj:
@@ -155,7 +156,6 @@ CHI_GJ = load_chicago_geojson()
 ALL_YEARS = load_chicago_benchmarks()
 LATEST_YEAR = ALL_YEARS["data_year"].max()
 latest = ALL_YEARS[ALL_YEARS["data_year"] == LATEST_YEAR].copy()
-
 
 
 # =============================================================================
@@ -192,6 +192,9 @@ SECTOR_CHART_WIDTH = 500
 SECTOR_CHART_HEIGHT = 290
 SECTOR_AXIS_MAX = 24  # Million tons; leaves room for the total labels
 MIN_LABELED_SEGMENT = 3.0  # Smallest segment (million tons) given a label
+SECTOR_LEGEND_COLUMNS = 2
+SECTOR_AXIS_LABEL_LIMIT = 240  # Pixels
+TOTAL_LABEL_GAP = 5  # Pixels between a bar and its total
 
 
 def make_sector_chart(df):
@@ -236,7 +239,7 @@ def make_sector_chart(df):
         "row:N",
         title=None,
         scale=alt.Scale(domain=ROW_ORDER),
-        axis=alt.Axis(labelLimit=240),
+        axis=alt.Axis(labelLimit=SECTOR_AXIS_LABEL_LIMIT),
     )
     bars = (
         alt.Chart(rows)
@@ -255,14 +258,16 @@ def make_sector_chart(df):
                     domain=SUBSECTOR_ORDER,
                     range=list(SUBSECTOR_COLORS.values()),
                 ),
-                legend=alt.Legend(orient="bottom", columns=2),
+                legend=alt.Legend(
+                    orient="bottom", columns=SECTOR_LEGEND_COLUMNS
+                ),
             ),
             order=alt.Order("subsector_rank:Q"),
         )
     )
     segment_labels = (
         alt.Chart(labeled_segments)
-        .mark_text(color="white", fontSize=12, fontWeight="bold")
+        .mark_text(color="white", fontSize=LABEL_FONT_SIZE, fontWeight="bold")
         .encode(
             y=y_rows,
             x=alt.X("segment_middle:Q"),
@@ -271,7 +276,12 @@ def make_sector_chart(df):
     )
     total_labels = (
         alt.Chart(totals)
-        .mark_text(align="left", dx=5, fontSize=12, color=INK)
+        .mark_text(
+            align="left",
+            dx=TOTAL_LABEL_GAP,
+            fontSize=LABEL_FONT_SIZE,
+            color=INK,
+        )
         .encode(y=y_rows, x=alt.X(f"{SECTOR_VALUE}:Q"), text="label:N")
     )
 
@@ -306,7 +316,7 @@ MAP_HEIGHT = 660
 CITY_FILL_COLOR = "#F1F3F5"
 CITY_OUTLINE_COLOR = "#B8C0C8"
 CITY_OUTLINE_WIDTH = 0.6
-LABEL_FONT_SIZE = 11
+MAP_LABEL_SIZE = 11
 LABEL_OFFSET = -1  # Pixels; lifts each label slightly above its point
 
 # Place labels as (text, longitude, latitude, alignment).
@@ -366,7 +376,7 @@ def make_label_layer():
     layers = [
         alt.Chart(labels[labels["align"] == align])
         .mark_text(
-            align=align, fontSize=LABEL_FONT_SIZE, color=MUTED, dy=LABEL_OFFSET
+            align=align, fontSize=MAP_LABEL_SIZE, color=MUTED, dy=LABEL_OFFSET
         )
         .encode(longitude="longitude:Q", latitude="latitude:Q", text="text:N")
         for align in ("left", "right")
@@ -544,7 +554,324 @@ save_chart(make_bubble_map(latest), "2_building_bubble_map")
 
 
 # =============================================================================
-# Chart 3: Total emissions by property type
+# Chart 3: The same buildings over time
+# =============================================================================
+
+
+# Column with each building's floor area
+AREA_COLUMN = "gross_floor_area_buildings_sq_ft_"
+LABEL_NUDGE = 9  # Pixels between the end labels of lines that nearly overlap
+END_LABEL_GAP = 8  # Pixels between a line's end and its label
+TREND_LEGEND_COLUMNS = 1
+TREND_LEGEND_LABEL_LIMIT = 400  # Pixels
+SOLID_DASH = [1, 0]  # A dash pattern that draws a solid line
+HYPOTHETICAL_DASH = [6, 4]
+# A paler red than the emissions line
+HYPOTHETICAL_EMISSIONS_COLOR = "#EE8B98"
+
+
+def estimate_emission_factors(d):
+    """
+    Estimate each fuel's emission factor (kg CO2e per kBtu) from the
+    buildings' fuel use and reported emissions, by least squares through the
+    origin. Fuels with a negative factor are dropped and the fit repeated.
+
+    Inputs: a DataFrame of buildings from one year.
+    Output: a Series of factors, indexed by fuel column.
+    """
+    d = d.dropna(subset=[GHG_TOTAL])
+    use = d[list(FUEL_COLS)].fillna(0)
+    emitted_kg = d[GHG_TOTAL] * THOUSAND
+    fuels = list(FUEL_COLS)
+    while True:
+        factors, *_ = np.linalg.lstsq(
+            use[fuels].values, emitted_kg.values, rcond=None
+        )
+        negative = [f for f, x in zip(fuels, factors) if x < 0]
+        if not negative:
+            break
+        fuels = [f for f in fuels if f not in negative]
+    factors = pd.Series(factors, index=fuels)
+    return factors.reindex(list(FUEL_COLS), fill_value=0)
+
+
+def calculate_fixed_factor_intensity(d, start):
+    """
+    Emissions per square foot for every building and year if each fuel had
+    kept its emission factor from the first year. Any change in this measure
+    comes from the buildings' energy use or fuel mix, not from the grid.
+
+    Inputs: a DataFrame of the buildings in every year, and the first year.
+    Output: a DataFrame of emissions per square foot, with one row per
+        building and one column per year.
+    """
+    factors = estimate_emission_factors(d[d["data_year"] == start])
+    use = d[list(FUEL_COLS)].fillna(0)
+    intensity = (use * factors).sum(axis=1) / d[AREA_COLUMN]
+    return intensity.groupby([d["id"], d["data_year"]]).first().unstack()
+
+
+def make_trend_chart(df, start=2018, end=2023):
+    """
+    Line chart of how the median building's energy use and emissions
+    changed, for the buildings that reported every year. Each building is
+    compared with its own value in the first year, and the line shows the
+    median of those percentages. A dashed line shows what emissions would
+    have been if the emission factors had stayed at their first-year level,
+    which separates a cleaner grid from changes in the buildings.
+
+    Inputs: all-years DataFrame, and the first and last year to show.
+    Output: an Altair chart.
+    """
+    energy = "Energy used per square foot"
+    emissions = "Emissions per square foot"
+    fixed = "Emissions with the grid at its 2018 level"
+    metrics = {
+        "site_eui_kbtu_sq_ft_": energy,
+        GHG_INTENSITY: emissions,
+    }
+    d = df[df["data_year"].between(start, end)]
+    wide = d.pivot_table(index="id", columns="data_year", values=list(metrics))
+    ids = wide.dropna().index  # buildings with every metric in every year
+    wide = wide.loc[ids]
+
+    # Each building as a percent of its own first-year value, then the
+    # median across buildings for each year
+    trend = pd.DataFrame(
+        {
+            name: (wide[column].div(wide[column][start], axis=0) * 100).median()
+            for column, name in metrics.items()
+        }
+    )
+    held = calculate_fixed_factor_intensity(d[d["id"].isin(ids)], start)
+    held = held.where(held[start] > 0)
+    trend[fixed] = (held.div(held[start], axis=0) * 100).median()
+
+    trend = trend.reset_index().melt(
+        "data_year", var_name="measure", value_name="index"
+    )
+
+    # One legend for color and dashes, with line symbols so the hypothetical
+    # line shows as dashes
+    legend = alt.Legend(
+        orient="top",
+        columns=TREND_LEGEND_COLUMNS,
+        labelLimit=TREND_LEGEND_LABEL_LIMIT,
+        symbolType="stroke",
+    )
+    base = alt.Chart(trend).encode(
+        x=alt.X("data_year:O", title="Year", axis=alt.Axis(labelAngle=0)),
+        y=alt.Y(
+            "index:Q",
+            title=f"Median building, as % of its own {start} level",
+            scale=alt.Scale(zero=False),
+        ),
+        color=alt.Color(
+            "measure:N",
+            title=None,
+            scale=alt.Scale(
+                domain=[energy, emissions, fixed],
+                range=[DEEP_BLUE, STAR_RED, HYPOTHETICAL_EMISSIONS_COLOR],
+            ),
+            legend=legend,
+        ),
+        strokeDash=alt.StrokeDash(
+            "measure:N",
+            scale=alt.Scale(
+                domain=[energy, emissions, fixed],
+                range=[SOLID_DASH, SOLID_DASH, HYPOTHETICAL_DASH],
+            ),
+            legend=legend,
+        ),
+    )
+    lines = base.mark_line(point=True, strokeWidth=LINE_WIDTH).encode(
+        tooltip=[
+            alt.Tooltip("data_year:O", title="Year"),
+            alt.Tooltip("measure:N", title="Measure"),
+            alt.Tooltip("index:Q", title="Index", format=".1f"),
+        ]
+    )
+    # End-of-line numbers. Make sure the energy and hypothetical emissions
+    # lines are not on top of each other.
+    label_offsets = {energy: LABEL_NUDGE, emissions: 0, fixed: -LABEL_NUDGE}
+    labels = alt.layer(
+        *[
+            base.transform_filter(
+                (alt.datum.data_year == end) & (alt.datum.measure == measure)
+            )
+            .mark_text(
+                align="left",
+                dx=END_LABEL_GAP,
+                dy=offset,
+                fontSize=LABEL_FONT_SIZE,
+            )
+            .encode(text=alt.Text("index:Q", format=".0f"))
+            for measure, offset in label_offsets.items()
+        ]
+    )
+    ref = (
+        alt.Chart(pd.DataFrame({"y": [100]}))
+        .mark_rule(strokeDash=REFERENCE_DASH, color="gray")
+        .encode(y="y:Q")
+    )
+    return (ref + lines + labels).properties(
+        width=CHART_WIDTH,
+        height=LINE_CHART_HEIGHT,
+        title=alt.TitleParams(
+            f"The same {len(ids):,} buildings from {start}–{end}",
+            subtitle=[
+                "The median building's energy use and emissions per square "
+                f"foot, each as a percent of its own {start} level.",
+                "The dashed line shows emissions if the grid had stayed at its"
+                f" {start} level.",
+            ],
+            anchor="start",
+        ),
+    )
+
+
+save_chart(make_trend_chart(ALL_YEARS), "3_same_building_trend")
+
+
+# =============================================================================
+# Chart 4: Fuel mix of all reporting buildings
+# =============================================================================
+
+# Gas and electricity get slices; all other fuels are grouped together
+OTHER_FUELS = "Other fuels"
+DONUT_FUELS = ["Natural gas", "Electricity", OTHER_FUELS]
+DONUT_COLORS = [FLAME, FLAG_BLUE, GRAY]
+DONUT_SIZE = 240  # Pixels
+DONUT_OUTER_RADIUS = 100
+DONUT_INNER_RADIUS = 55
+DONUT_LABEL_RADIUS = 78  # Middle of the ring
+OUTSIDE_LABEL_RADIUS = 114  # Just outside the ring
+MIN_INSIDE_LABEL_SHARE = 0.08  # Smaller slices are labeled outside
+DONUT_LABEL_SIZE = 14
+DONUT_TITLE_SIZE = 14
+
+
+def summarize_fuel_use(df):
+    """
+    Find each fuel group's share of the energy used and of the emissions
+    (energy times its emission factor).
+
+    Inputs: latest-year DataFrame of reporting buildings.
+    Output: a DataFrame with one row per measure and fuel group: "measure",
+        "fuel", "share" and "fuel_rank" (drawing order).
+    """
+    energy = df[list(FUEL_COLS)].clip(lower=0).sum()
+    emissions = energy * estimate_emission_factors(df)
+    rows = []
+    for measure, amounts in (("Energy used", energy), ("Emissions", emissions)):
+        amounts = amounts.rename(index=FUEL_COLS)
+        groups = [f if f in DONUT_FUELS else OTHER_FUELS for f in amounts.index]
+        shares = amounts.groupby(groups).sum()
+        shares = shares / shares.sum()
+        for fuel in DONUT_FUELS:
+            rows.append(
+                {
+                    "measure": measure,
+                    "fuel": fuel,
+                    "share": shares.get(fuel, 0),
+                    "fuel_rank": DONUT_FUELS.index(fuel),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def make_donut(shares, measure, title, show_legend):
+    """
+    Build one donut of fuel shares, labeled inside the ring (small slices
+    outside it).
+
+    Inputs: the table from summarize_fuel_use, the measure to draw, the
+        title, and whether to show the legend.
+    Output: an Altair chart.
+    """
+    legend = None
+    if show_legend:
+        legend = alt.Legend(orient="bottom", title=None, symbolType="circle")
+    base = alt.Chart(shares[shares["measure"] == measure]).encode(
+        theta=alt.Theta("share:Q", stack=True),
+        color=alt.Color(
+            "fuel:N",
+            scale=alt.Scale(domain=DONUT_FUELS, range=DONUT_COLORS),
+            legend=legend,
+        ),
+        order=alt.Order("fuel_rank:Q"),
+    )
+    ring = base.mark_arc(
+        innerRadius=DONUT_INNER_RADIUS,
+        outerRadius=DONUT_OUTER_RADIUS,
+        stroke="white",
+    )
+    inside_labels = (
+        base.transform_filter(alt.datum.share >= MIN_INSIDE_LABEL_SHARE)
+        .mark_text(
+            radius=DONUT_LABEL_RADIUS,
+            fontSize=DONUT_LABEL_SIZE,
+            fontWeight="bold",
+        )
+        .encode(
+            text=alt.Text("share:Q", format=".0%"),
+            color=alt.value("white"),  # Not the slice color
+        )
+    )
+    outside_labels = (
+        base.transform_filter(alt.datum.share < MIN_INSIDE_LABEL_SHARE)
+        .mark_text(radius=OUTSIDE_LABEL_RADIUS, fontSize=DONUT_LABEL_SIZE)
+        .encode(
+            text=alt.Text("share:Q", format=".0%"),
+            color=alt.value(INK),
+        )
+    )
+    return (ring + inside_labels + outside_labels).properties(
+        width=DONUT_SIZE,
+        height=DONUT_SIZE,
+        title=alt.TitleParams(
+            title, anchor="middle", fontSize=DONUT_TITLE_SIZE
+        ),
+    )
+
+
+def make_fuel_donuts(df):
+    """
+    Two donuts side by side: fuel shares of energy used and of emissions.
+
+    Inputs: latest-year DataFrame of reporting buildings.
+    Output: an Altair chart.
+    """
+    shares = summarize_fuel_use(df)
+    energy_donut = make_donut(
+        shares, "Energy used", "Share of energy used", True
+    )
+    emissions_donut = make_donut(
+        shares, "Emissions", "Share of emissions", False
+    )
+    return (
+        alt.hconcat(energy_donut, emissions_donut)
+        .resolve_scale(color="shared")
+        .properties(
+            title=alt.TitleParams(
+                f"Fuel mix of Chicago's reporting buildings ({LATEST_YEAR})",
+                subtitle=[
+                    "Left: share of energy used. Right: share of greenhouse "
+                    "gas emissions,",
+                    "estimated from each fuel's emission factor. Other fuels: "
+                    "district steam, chilled water and other fuel.",
+                ],
+                anchor="start",
+            )
+        )
+    )
+
+
+save_chart(make_fuel_donuts(latest), "4_fuel_mix")
+
+
+# =============================================================================
+# Chart 5: Total emissions by property type
 # =============================================================================
 
 # Types shown, and how many top bars are highlighted
@@ -554,6 +881,7 @@ HIGHLIGHT_BAR_COLOR = DEEP_BLUE
 OTHER_BAR_COLOR = "#B8C4D0"
 AVERAGE_PANEL_WIDTH = 240  # Pixels
 LABEL_ROOM = 1.12  # Axis extends past the longest bar for its label
+HIDDEN = 0  # Opacity of the layer that only draws the top axis
 
 # Tons of CO2e per gasoline car per year (EPA Equivalencies Calculator)
 TONS_CO2E_PER_CAR_YEAR = 4.29
@@ -571,7 +899,7 @@ def format_compact_tons(amount):
     return f"{amount / THOUSAND:.0f}K"
 
 
-def emissions_by_type_bar_chart(df):
+def make_type_totals_chart(df):
     """
     Total emissions (left) and average emissions per building (right) for the
     highest-emitting property types, so total = buildings x average.
@@ -650,7 +978,9 @@ def emissions_by_type_bar_chart(df):
         )
         labels = (
             alt.Chart(property_type)
-            .mark_text(align="left", dx=4, fontSize=12, color=INK)
+            .mark_text(
+                align="left", dx=LABEL_GAP, fontSize=LABEL_FONT_SIZE, color=INK
+            )
             .encode(
                 x=alt.X(f"{value}:Q", scale=scale, axis=None),
                 y=alt.Y("axis_label:N", sort=type_order, **y_options),
@@ -659,7 +989,7 @@ def emissions_by_type_bar_chart(df):
         )
         cars_axis = (
             alt.Chart(property_type)
-            .mark_point(opacity=0)
+            .mark_point(opacity=HIDDEN)
             .encode(
                 x=alt.X(
                     f"{cars}:Q",
@@ -707,11 +1037,11 @@ def emissions_by_type_bar_chart(df):
     )
 
 
-save_chart(emissions_by_type_bar_chart(latest), "3_emissions_by_type")
+save_chart(make_type_totals_chart(latest), "5_emissions_by_type")
 
 
 # =============================================================================
-# Chart 4: Emissions per square foot by property type (box plot)
+# Chart 6: Emissions per square foot by property type (box plot)
 # =============================================================================
 
 # Types shown: the largest by total emissions, plus any type with enough
@@ -729,7 +1059,7 @@ REFERENCE_LINE_DASH = [5, 4]
 REFERENCE_LABEL_SIZE = 12
 
 
-def emissions_by_type_box_plot(df):
+def make_type_box_plot(df):
     """
     Box plot of emissions per square foot for the BOX_LARGEST_TYPES types
     with the most total emissions, plus the intense types (median at least
@@ -820,7 +1150,7 @@ def emissions_by_type_box_plot(df):
         .mark_text(
             align="left",
             baseline="bottom",
-            dx=4,
+            dx=LABEL_GAP,
             fontSize=REFERENCE_LABEL_SIZE,
             color=MUTED,
         )
@@ -842,306 +1172,7 @@ def emissions_by_type_box_plot(df):
     )
 
 
-save_chart(emissions_by_type_box_plot(latest), "4_emissions_type_box")
-
-
-# =============================================================================
-# Chart 5: Fuel mix of all reporting buildings
-# =============================================================================
-
-# Gas and electricity get slices; all other fuels are grouped together
-OTHER_FUELS = "Other fuels"
-DONUT_FUELS = ["Natural gas", "Electricity", OTHER_FUELS]
-DONUT_COLORS = [FLAME, FLAG_BLUE, GRAY]
-DONUT_SIZE = 240  # Pixels
-DONUT_OUTER_RADIUS = 100
-DONUT_INNER_RADIUS = 55
-DONUT_LABEL_RADIUS = 78  # Middle of the ring
-OUTSIDE_LABEL_RADIUS = 114  # Just outside the ring
-MIN_INSIDE_LABEL_SHARE = 0.08  # Smaller slices are labeled outside
-DONUT_LABEL_SIZE = 14
-
-
-def estimate_emission_factors(d):
-    """
-    Estimate each fuel's emission factor (kg CO2e per kBtu) from the
-    buildings' fuel use and reported emissions, by least squares through the
-    origin. Fuels with a negative factor are dropped and the fit repeated.
-
-    Inputs: a DataFrame of buildings from one year.
-    Output: a Series of factors, indexed by fuel column.
-    """
-    d = d.dropna(subset=[GHG_TOTAL])
-    use = d[list(FUEL_COLS)].fillna(0)
-    emitted_kg = d[GHG_TOTAL] * THOUSAND
-    fuels = list(FUEL_COLS)
-    while True:
-        factors, *_ = np.linalg.lstsq(
-            use[fuels].values, emitted_kg.values, rcond=None
-        )
-        negative = [f for f, x in zip(fuels, factors) if x < 0]
-        if not negative:
-            break
-        fuels = [f for f in fuels if f not in negative]
-    factors = pd.Series(factors, index=fuels)
-    return factors.reindex(list(FUEL_COLS), fill_value=0)
-
-
-def summarize_fuel_use(df):
-    """
-    Find each fuel group's share of the energy used and of the emissions
-    (energy times its emission factor).
-
-    Inputs: latest-year DataFrame of reporting buildings.
-    Output: a DataFrame with one row per measure and fuel group: "measure",
-        "fuel", "share" and "fuel_rank" (drawing order).
-    """
-    energy = df[list(FUEL_COLS)].clip(lower=0).sum()
-    emissions = energy * estimate_emission_factors(df)
-    rows = []
-    for measure, amounts in (("Energy used", energy), ("Emissions", emissions)):
-        amounts = amounts.rename(index=FUEL_COLS)
-        groups = [f if f in DONUT_FUELS else OTHER_FUELS for f in amounts.index]
-        shares = amounts.groupby(groups).sum()
-        shares = shares / shares.sum()
-        for fuel in DONUT_FUELS:
-            rows.append(
-                {
-                    "measure": measure,
-                    "fuel": fuel,
-                    "share": shares.get(fuel, 0),
-                    "fuel_rank": DONUT_FUELS.index(fuel),
-                }
-            )
-    return pd.DataFrame(rows)
-
-
-def make_donut(shares, measure, title, show_legend):
-    """
-    Build one donut of fuel shares, labeled inside the ring (small slices
-    outside it).
-
-    Inputs: the table from summarize_fuel_use, the measure to draw, the
-        title, and whether to show the legend.
-    Output: an Altair chart.
-    """
-    legend = None
-    if show_legend:
-        legend = alt.Legend(orient="bottom", title=None, symbolType="circle")
-    base = alt.Chart(shares[shares["measure"] == measure]).encode(
-        theta=alt.Theta("share:Q", stack=True),
-        color=alt.Color(
-            "fuel:N",
-            scale=alt.Scale(domain=DONUT_FUELS, range=DONUT_COLORS),
-            legend=legend,
-        ),
-        order=alt.Order("fuel_rank:Q"),
-    )
-    ring = base.mark_arc(
-        innerRadius=DONUT_INNER_RADIUS,
-        outerRadius=DONUT_OUTER_RADIUS,
-        stroke="white",
-    )
-    inside_labels = (
-        base.transform_filter(alt.datum.share >= MIN_INSIDE_LABEL_SHARE)
-        .mark_text(
-            radius=DONUT_LABEL_RADIUS,
-            fontSize=DONUT_LABEL_SIZE,
-            fontWeight="bold",
-        )
-        .encode(
-            text=alt.Text("share:Q", format=".0%"),
-            color=alt.value("white"),  # Not the slice color
-        )
-    )
-    outside_labels = (
-        base.transform_filter(alt.datum.share < MIN_INSIDE_LABEL_SHARE)
-        .mark_text(radius=OUTSIDE_LABEL_RADIUS, fontSize=DONUT_LABEL_SIZE)
-        .encode(
-            text=alt.Text("share:Q", format=".0%"),
-            color=alt.value(INK),
-        )
-    )
-    return (ring + inside_labels + outside_labels).properties(
-        width=DONUT_SIZE,
-        height=DONUT_SIZE,
-        title=alt.TitleParams(title, anchor="middle", fontSize=14),
-    )
-
-
-def make_fuel_donuts(df):
-    """
-    Two donuts side by side: fuel shares of energy used and of emissions.
-
-    Inputs: latest-year DataFrame of reporting buildings.
-    Output: an Altair chart.
-    """
-    shares = summarize_fuel_use(df)
-    energy_donut = make_donut(shares, "Energy used", "Share of energy used", True)
-    emissions_donut = make_donut(
-        shares, "Emissions", "Share of emissions", False
-    )
-    return (
-        alt.hconcat(energy_donut, emissions_donut)
-        .resolve_scale(color="shared")
-        .properties(
-            title=alt.TitleParams(
-                f"Fuel mix of Chicago's reporting buildings ({LATEST_YEAR})",
-                subtitle=[
-                    "Left: share of energy used. Right: share of greenhouse "
-                    "gas emissions,",
-                    "estimated from each fuel's emission factor. Other fuels: "
-                    "district steam, chilled water and other fuel.",
-                ],
-                anchor="start",
-            )
-        )
-    )
-
-
-save_chart(make_fuel_donuts(latest), "5_fuel_mix")
-
-
-# =============================================================================
-# Chart 6: The same buildings over time
-# =============================================================================
-
-
-# Column with each building's floor area
-AREA_COLUMN = "gross_floor_area_buildings_sq_ft_"
-LABEL_NUDGE = 9  # Pixels between the end labels of lines that nearly overlap
-# A paler red than the emissions line
-HYPOTHETICAL_EMISSIONS_COLOR = "#EE8B98"
-
-
-def calculate_fixed_factor_intensity(d, start):
-    """
-    Emissions per square foot for every building and year if each fuel had
-    kept its emission factor from the first year. Any change in this measure
-    comes from the buildings' energy use or fuel mix, not from the grid.
-
-    Inputs: a DataFrame of the buildings in every year, and the first year.
-    Output: a DataFrame of emissions per square foot, with one row per
-        building and one column per year.
-    """
-    factors = estimate_emission_factors(d[d["data_year"] == start])
-    use = d[list(FUEL_COLS)].fillna(0)
-    intensity = (use * factors).sum(axis=1) / d[AREA_COLUMN]
-    return intensity.groupby([d["id"], d["data_year"]]).first().unstack()
-
-
-def same_building_trend(df, start=2018, end=2023):
-    """
-    Line chart of how the median building's energy use and emissions
-    changed, for the buildings that reported every year. Each building is
-    compared with its own value in the first year, and the line shows the
-    median of those percentages. A dashed line shows what emissions would
-    have been if the emission factors had stayed at their first-year level,
-    which separates a cleaner grid from changes in the buildings.
-
-    Inputs: all-years DataFrame, and the first and last year to show.
-    Output: an Altair chart.
-    """
-    energy = "Energy used per square foot"
-    emissions = "Emissions per square foot"
-    fixed = "Emissions with the grid at its 2018 level"
-    metrics = {
-        "site_eui_kbtu_sq_ft_": energy,
-        GHG_INTENSITY: emissions,
-    }
-    d = df[df["data_year"].between(start, end)]
-    wide = d.pivot_table(index="id", columns="data_year", values=list(metrics))
-    ids = wide.dropna().index  # buildings with every metric in every year
-    wide = wide.loc[ids]
-
-    # Each building as a percent of its own first-year value, then the
-    # median across buildings for each year
-    trend = pd.DataFrame(
-        {
-            name: (wide[column].div(wide[column][start], axis=0) * 100).median()
-            for column, name in metrics.items()
-        }
-    )
-    held = calculate_fixed_factor_intensity(d[d["id"].isin(ids)], start)
-    held = held.where(held[start] > 0)
-    trend[fixed] = (held.div(held[start], axis=0) * 100).median()
-
-    trend = trend.reset_index().melt(
-        "data_year", var_name="measure", value_name="index"
-    )
-
-    # One legend for color and dashes, with line symbols so the hypothetical
-    # line shows as dashes
-    legend = alt.Legend(
-        orient="top", columns=1, labelLimit=400, symbolType="stroke"
-    )
-    base = alt.Chart(trend).encode(
-        x=alt.X("data_year:O", title="Year", axis=alt.Axis(labelAngle=0)),
-        y=alt.Y(
-            "index:Q",
-            title=f"Median building, as % of its own {start} level",
-            scale=alt.Scale(zero=False),
-        ),
-        color=alt.Color(
-            "measure:N",
-            title=None,
-            scale=alt.Scale(
-                domain=[energy, emissions, fixed],
-                range=[DEEP_BLUE, STAR_RED, HYPOTHETICAL_EMISSIONS_COLOR],
-            ),
-            legend=legend,
-        ),
-        strokeDash=alt.StrokeDash(
-            "measure:N",
-            scale=alt.Scale(
-                domain=[energy, emissions, fixed],
-                range=[[1, 0], [1, 0], [6, 4]],
-            ),
-            legend=legend,
-        ),
-    )
-    lines = base.mark_line(point=True, strokeWidth=3).encode(
-        tooltip=[
-            alt.Tooltip("data_year:O", title="Year"),
-            alt.Tooltip("measure:N", title="Measure"),
-            alt.Tooltip("index:Q", title="Index", format=".1f"),
-        ]
-    )
-    # End-of-line numbers. Make sure the energy and hypothetical emissions
-    # lines are not on top of each other.
-    label_offsets = {energy: LABEL_NUDGE, emissions: 0, fixed: -LABEL_NUDGE}
-    labels = alt.layer(
-        *[
-            base.transform_filter(
-                (alt.datum.data_year == end) & (alt.datum.measure == measure)
-            )
-            .mark_text(align="left", dx=8, dy=offset, fontSize=12)
-            .encode(text=alt.Text("index:Q", format=".0f"))
-            for measure, offset in label_offsets.items()
-        ]
-    )
-    ref = (
-        alt.Chart(pd.DataFrame({"y": [100]}))
-        .mark_rule(strokeDash=[4, 4], color="gray")
-        .encode(y="y:Q")
-    )
-    return (ref + lines + labels).properties(
-        width=CHART_WIDTH,
-        height=LINE_CHART_HEIGHT,
-        title=alt.TitleParams(
-            f"The same {len(ids):,} buildings from {start}–{end}",
-            subtitle=[
-                "The median building's energy use and emissions per square "
-                f"foot, each as a percent of its own {start} level.",
-                "The dashed line shows emissions if the grid had stayed at its"
-                f" {start} level.",
-            ],
-            anchor="start",
-        ),
-    )
-
-
-save_chart(same_building_trend(ALL_YEARS), "6_same_building_trend")
+save_chart(make_type_box_plot(latest), "6_emissions_type_box")
 
 
 # =============================================================================
@@ -1151,9 +1182,13 @@ save_chart(same_building_trend(ALL_YEARS), "6_same_building_trend")
 
 # Shares of buildings that are marked on the curve
 MARK_PERCENTS = [1, 5, 10]
+PERCENT_RANGE = [0, 100]
+MARKER_SIZE = 100  # Square pixels
+MARKER_LABEL_DX = 10  # Pixels
+MARKER_LABEL_DY = 14
 
 
-def pareto_curve(df):
+def make_pareto_chart(df):
     """
     Cumulative share of emissions as buildings are added largest first,
     with the top 1%, 5% and 10% of buildings marked.
@@ -1191,7 +1226,7 @@ def pareto_curve(df):
 
     line = (
         alt.Chart(cumulative)
-        .mark_line(color=STAR_RED, strokeWidth=3)
+        .mark_line(color=STAR_RED, strokeWidth=LINE_WIDTH)
         .encode(
             x=alt.X(
                 "pct_buildings:Q",
@@ -1201,19 +1236,24 @@ def pareto_curve(df):
             y=alt.Y(
                 "cum_pct_emissions:Q",
                 title="Share of total emissions (running total)",
-                scale=alt.Scale(domain=[0, 100]),
+                scale=alt.Scale(domain=PERCENT_RANGE),
                 axis=alt.Axis(labelExpr="datum.value + '%'"),
             ),
         )
     )
     points = (
         alt.Chart(marks)
-        .mark_point(size=100, filled=True, color="black")
+        .mark_point(size=MARKER_SIZE, filled=True, color="black")
         .encode(x="pct_buildings:Q", y="cum_pct_emissions:Q")
     )
     labels = (
         alt.Chart(marks)
-        .mark_text(align="left", dx=10, dy=14, fontSize=12)
+        .mark_text(
+            align="left",
+            dx=MARKER_LABEL_DX,
+            dy=MARKER_LABEL_DY,
+            fontSize=LABEL_FONT_SIZE,
+        )
         .encode(x="pct_buildings:Q", y="cum_pct_emissions:Q", text="label:N")
     )
     year = df["data_year"].max()
@@ -1234,111 +1274,262 @@ def pareto_curve(df):
     )
 
 
-save_chart(pareto_curve(latest), "7_pareto_curve")
+save_chart(make_pareto_chart(latest), "7_pareto_curve")
 
 
 # =============================================================================
 # Chart 8: Priority buildings
 # =============================================================================
 
+# Share of rated buildings counted as top emitters, and buildings named
+PRIORITY_TOP_SHARE = 0.10
+PRIORITY_LABEL_COUNT = 5
+CUT_LABEL_SIZE = 11
+CUT_LABEL_OFFSET = -8  # Pixels above the cutoff line
+CUT_LABEL_X = 5  # Pixels from the left edge
+NAME_LABEL_SIZE = 10
+NAME_LABEL_GAP = 8  # Pixels between a dot and its name
 
-def priority_buildings(df, top_pct=0.10, n_labels=8):
+# Dot colors: top emitters (amber) and poorly rated buildings (red, as on the
+# map) overlap in a dark crimson
+PRIORITY_BOTH_COLOR = "#7A0A24"
+OTHER_DOTS_COLOR = "#d9d9d9"
+OUTLINE_COLOR = "white"
+BOTH_OUTLINE_COLOR = "#4D0516"
+OUTLINE_WIDTH = 0.3
+BOTH_OUTLINE_WIDTH = 0.5
+
+# Highlighted dots are larger and more opaque than the other buildings
+GROUP_DOT_SIZE = 70  # Square pixels
+OTHER_DOT_SIZE = 25
+GROUP_OPACITY = 0.9
+OTHER_OPACITY = 0.5
+
+# Both axes are logarithmic, trimmed to the data, with gridlines at 1, 2 and 5
+# times each power of 10. Powers of 10 get a darker line.
+INTENSITY_RANGE = [0.5, 200]
+EMISSIONS_RANGE = [50, 120000]
+MAJOR_GRIDLINE_COLOR = "#B8C0C8"
+MINOR_GRIDLINE_COLOR = GRID
+
+
+def make_log_ticks(low, high):
     """
-    Scatter of emissions intensity vs. total emissions, highlighting the
-    top emitters, poorly rated buildings, and the overlap between them.
+    Find the 1-2-5 gridline values of a log axis.
 
-    Inputs: latest-year DataFrame, the share of buildings counted as top
-        emitters, and how many overlap buildings to label by name.
+    Inputs: the lowest and highest values on the axis.
+    Output: a tuple of all tick values, and the powers of 10 among them.
+    """
+    ticks = [
+        step * 10**power
+        for power in range(-1, 6)
+        for step in (1, 2, 5)
+        if low <= step * 10**power <= high
+    ]
+    return ticks, [t for t in ticks if t in (1, 10, 100, 1000, 10000, 100000)]
+
+
+def make_axis(title, low, high):
+    """
+    Build a log axis with 1-2-5 gridlines and darker lines at powers of 10.
+
+    Inputs: the axis title and its lowest and highest values.
+    Output: an Altair Axis.
+    """
+    ticks, major_ticks = make_log_ticks(low, high)
+    return alt.Axis(
+        title=title,
+        values=ticks,
+        format=",",
+        gridColor={
+            "condition": {
+                "test": f"indexof({major_ticks}, datum.value) >= 0",
+                "value": MAJOR_GRIDLINE_COLOR,
+            },
+            "value": MINOR_GRIDLINE_COLOR,
+        },
+    )
+
+
+def make_priority_scatter(df):
+    """
+    Scatter of emissions per square foot against total emissions, highlighting
+    the top emitters (top PRIORITY_TOP_SHARE by total), the poorly rated
+    buildings, and the buildings that are both. The largest of the last group
+    are named.
+
+    Inputs: latest-year DataFrame.
     Output: an Altair chart.
     """
-    ghg, inten = GHG_TOTAL, GHG_INTENSITY
-    d = df.dropna(subset=[ghg, inten, "chicago_energy_rating"]).copy()
-    d = d[(d[ghg] > 0) & (d[inten] > 0)]
-    cutoff = d[ghg].quantile(1 - top_pct)
-    top = d[ghg] >= cutoff
-    low = d["chicago_energy_rating"] <= 1
-    d["group"] = np.select(
-        [top & low, top, low],
-        ["Both", "Top 10% emitter", "Rated 0–1 stars"],
+    d = df.dropna(subset=[GHG_TOTAL, GHG_INTENSITY, "chicago_energy_rating"])
+    d = d[(d[GHG_TOTAL] > 0) & (d[GHG_INTENSITY] > 0)]
+    cutoff = d[GHG_TOTAL].quantile(1 - PRIORITY_TOP_SHARE)
+    is_top = d[GHG_TOTAL] >= cutoff
+    is_poor = d["chicago_energy_rating"] == POOR_RATING
+    group = np.select(
+        [is_top & is_poor, is_top, is_poor],
+        ["Both", "Top emitter only", "Poorly rated only"],
         default="Other buildings",
     )
-    d["layer"] = d["group"].map(
-        {
-            "Other buildings": 0,
-            "Rated 0–1 stars": 1,
-            "Top 10% emitter": 2,
-            "Both": 3,
-        }
-    )
-    order = ["Both", "Top 10% emitter", "Rated 0–1 stars", "Other buildings"]
-    colors = [STAR_RED, AMBER, CHARCOAL, "#d9d9d9"]
-    counts = d["group"].value_counts()
-    subtitle = [f"{counts.get(g, 0):,} buildings: {g}" for g in order[:3]]
+    counts = pd.Series(group).value_counts()
 
-    pts = (
+    # Legend names show how many buildings are in each group. The groups are
+    # drawn in the order below, so the highlighted ones sit on top.
+    draw_order = [
+        "Other buildings",
+        "Poorly rated only",
+        "Top emitter only",
+        "Both",
+    ]
+    legend_names = {
+        name: f"{name} ({counts[name]:,})"
+        for name in ("Top emitter only", "Poorly rated only", "Both")
+    }
+    legend_names["Other buildings"] = "All other buildings"
+    d = d.assign(
+        group=pd.Series(group, index=d.index).map(legend_names),
+        layer=[draw_order.index(g) for g in group],
+        highlighted=group != "Other buildings",
+    )
+    names = list(legend_names.values())
+    both_name = legend_names["Both"]
+
+    # Every layer must use these same scales, or the layers' own default
+    # scales would widen the axes back out
+    intensity_scale = alt.Scale(type="log", domain=INTENSITY_RANGE)
+    emissions_scale = alt.Scale(type="log", domain=EMISSIONS_RANGE)
+
+    def highlight_scale(other, highlighted):
+        return alt.Scale(
+            type="ordinal", domain=[False, True], range=[other, highlighted]
+        )
+
+    dots = (
         alt.Chart(d)
-        .mark_circle(stroke="white", strokeWidth=0.3)
+        .mark_circle()
         .encode(
             x=alt.X(
-                f"{inten}:Q",
-                scale=alt.Scale(type="log"),
-                title="GHG intensity (kg CO2e / sq ft, log scale)",
+                f"{GHG_INTENSITY}:Q",
+                scale=intensity_scale,
+                axis=make_axis(
+                    "Emissions per square foot (kg CO2e / sq ft, log scale)",
+                    *INTENSITY_RANGE,
+                ),
             ),
             y=alt.Y(
-                f"{ghg}:Q",
-                scale=alt.Scale(type="log"),
-                title="Total GHG emissions (metric tons CO2e, log scale)",
+                f"{GHG_TOTAL}:Q",
+                scale=emissions_scale,
+                axis=make_axis(
+                    "Total emissions per year (metric tons CO2e, log scale)",
+                    *EMISSIONS_RANGE,
+                ),
             ),
             color=alt.Color(
                 "group:N",
                 title=None,
-                sort=order,
-                scale=alt.Scale(domain=order, range=colors),
+                sort=names,
+                scale=alt.Scale(
+                    domain=names,
+                    range=[
+                        AMBER,
+                        POOR_RATING_COLOR,
+                        PRIORITY_BOTH_COLOR,
+                        OTHER_DOTS_COLOR,
+                    ],
+                ),
             ),
-            size=alt.condition(
-                alt.datum.layer > 0, alt.value(70), alt.value(25)
+            size=alt.Size(
+                "highlighted:N",
+                scale=highlight_scale(OTHER_DOT_SIZE, GROUP_DOT_SIZE),
+                legend=None,
             ),
-            opacity=alt.condition(
-                alt.datum.layer > 0, alt.value(0.9), alt.value(0.5)
+            opacity=alt.Opacity(
+                "highlighted:N",
+                scale=highlight_scale(OTHER_OPACITY, GROUP_OPACITY),
+                legend=None,
+            ),
+            # The overlap dots get a darker, slightly thicker edge
+            stroke=alt.condition(
+                alt.datum.group == both_name,
+                alt.value(BOTH_OUTLINE_COLOR),
+                alt.value(OUTLINE_COLOR),
+            ),
+            strokeWidth=alt.condition(
+                alt.datum.group == both_name,
+                alt.value(BOTH_OUTLINE_WIDTH),
+                alt.value(OUTLINE_WIDTH),
             ),
             order=alt.Order("layer:Q"),
         )
     )
 
+    # Dashed line (and its label) where the top emitters begin
+    cut_label = f"Top {PRIORITY_TOP_SHARE:.0%} start at {cutoff:,.0f} tons"
+    cut = pd.DataFrame({"y": [cutoff], "text": [cut_label]})
+    cut_y = alt.Y("y:Q", scale=emissions_scale)
     cut_line = (
-        alt.Chart(pd.DataFrame({"y": [cutoff]}))
-        .mark_rule(strokeDash=[4, 4], color="gray")
-        .encode(y="y:Q")
+        alt.Chart(cut)
+        .mark_rule(strokeDash=REFERENCE_DASH, color="gray")
+        .encode(y=cut_y)
     )
     cut_text = (
-        alt.Chart(
-            pd.DataFrame(
-                {
-                    "y": [cutoff],
-                    "t": [f"Top {top_pct:.0%} threshold: {cutoff:,.0f} tons"],
-                }
-            )
+        alt.Chart(cut)
+        .mark_text(
+            align="left",
+            dy=CUT_LABEL_OFFSET,
+            dx=LABEL_GAP,
+            fontSize=CUT_LABEL_SIZE,
+            color="gray",
         )
-        .mark_text(align="left", dy=-8, dx=4, fontSize=11, color="gray")
-        .encode(y="y:Q", text="t:N", x=alt.value(5))
+        .encode(y=cut_y, text="text:N", x=alt.value(CUT_LABEL_X))
     )
 
-    labeled = d[d["group"] == "Both"].nlargest(n_labels, ghg)
-    labels = (
-        alt.Chart(labeled)
-        .mark_text(align="left", dx=8, fontSize=10)
-        .encode(x=f"{inten}:Q", y=f"{ghg}:Q", text="property_name:N")
+    # Name the largest buildings in both groups, alternating sides so that
+    # neighboring labels do not run into each other. A name that is only a
+    # number is replaced by the address.
+    largest = d[d["group"] == both_name].nlargest(
+        PRIORITY_LABEL_COUNT, GHG_TOTAL
     )
+    largest = largest.assign(
+        label=[
+            address if str(name).strip().isdigit() else name
+            for name, address in zip(
+                largest["property_name"], largest["address"]
+            )
+        ]
+    )
+    name_labels = [
+        alt.Chart(largest.iloc[start::2])
+        .mark_text(align=align, dx=dx, fontSize=NAME_LABEL_SIZE)
+        .encode(
+            x=alt.X(f"{GHG_INTENSITY}:Q", scale=intensity_scale),
+            y=alt.Y(f"{GHG_TOTAL}:Q", scale=emissions_scale),
+            text="label:N",
+        )
+        for start, align, dx in (
+            (0, "left", NAME_LABEL_GAP),
+            (1, "right", -NAME_LABEL_GAP),
+        )
+    ]
 
-    return (pts + cut_line + cut_text + labels).properties(
+    return alt.layer(dots, cut_line, cut_text, *name_labels).properties(
         width=PRIORITY_WIDTH,
         height=PRIORITY_HEIGHT,
         title=alt.TitleParams(
-            "Big emitters and poor performers: where they overlap",
-            subtitle=subtitle,
+            "Emissions per square foot against total emissions, by building",
+            subtitle=[
+                f"Top emitters: the {PRIORITY_TOP_SHARE:.0%} of rated "
+                "buildings with the most emissions.",
+                f"Poorly rated: 1 star. Named dots: the "
+                f"{PRIORITY_LABEL_COUNT} largest of the {counts['Both']}.",
+                "Both axes use a log scale: each darker gridline is 10 times "
+                "the one before.",
+            ],
             anchor="start",
         ),
     )
 
 
-save_chart(priority_buildings(latest), "8_priority_buildings", scale_factor=2.0)
+save_chart(
+    make_priority_scatter(latest), "8_priority_buildings", scale_factor=2.0
+)

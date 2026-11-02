@@ -11,7 +11,8 @@ Usage: call apply_theme() once before building any chart
 
 import altair as alt
 
-# Theme based off Chicago flag colors with energy adjacent accents (amber = electricity, flame = natural gas, green = clean energy)
+# Theme based off Chicago flag colors with energy adjacent accents
+# (amber = electricity, flame = natural gas, green = clean energy)
 FLAG_BLUE = "#41B6E6"
 STAR_RED = "#E4002B"
 DEEP_BLUE = "#1C7FB5"
