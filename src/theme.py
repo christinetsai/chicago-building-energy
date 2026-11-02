@@ -4,6 +4,8 @@ theme.py
 Shared visual theme for every chart: the color palette, the color scale
 for fuels, and the Altair theme (fonts, axes, legends, and titles).
 
+Author: Christine Tsai
+
 Usage: call apply_theme() once before building any chart
 """
 

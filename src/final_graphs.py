@@ -4,6 +4,8 @@ final_graphs.py
 Generates the charts for the Chicago building energy analysis and saves
 them to static-viz/charts/.
 
+Author: Christine Tsai
+
 Usage: uv run python src/final_graphs.py
 """
 

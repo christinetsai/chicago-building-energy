@@ -3,6 +3,8 @@ categories.py
 
 Groups the benchmarking data's property types into six broader building
 categories, and gives long property type names shorter display names.
+
+Author: Christine Tsai
 """
 
 import pandas as pd

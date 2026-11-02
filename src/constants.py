@@ -3,6 +3,8 @@ constants.py
 
 Constants shared by the chart code. Settings that belong to a single chart
 stay with the chart in final_graphs.py.
+
+Author: Christine Tsai
 """
 
 from pathlib import Path
