@@ -26,6 +26,7 @@ CHARCOAL = "#4A5568"
 POOR_RATING_COLOR = STAR_RED
 INK, MUTED, GRID = "#1B2A3A", "#6B7785", "#E6E9ED"
 
+
 def build_theme_config():
     """
     Altair theme used by every chart: fonts, axes, legends, and titles.
