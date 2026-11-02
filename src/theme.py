@@ -23,18 +23,6 @@ CHARCOAL = "#4A5568"
 POOR_RATING_COLOR = STAR_RED
 INK, MUTED, GRID = "#1B2A3A", "#6B7785", "#E6E9ED"
 
-FUEL_SCALE = alt.Scale(
-    domain=[
-        "Natural gas",
-        "Electricity",
-        "District steam",
-        "District chilled water",
-        "Other fuel",
-    ],
-    range=[FLAME, FLAG_BLUE, GRAY, GREEN, "#0E4A73"],
-)
-
-
 def build_theme_config():
     """
     Altair theme used by every chart: fonts, axes, legends, and titles.

@@ -41,7 +41,8 @@ from theme import (
     CHARCOAL,
     DEEP_BLUE,
     FLAG_BLUE,
-    FUEL_SCALE,
+    FLAME,
+    GRAY,
     INK,
     MUTED,
     POOR_RATING_COLOR,
@@ -767,158 +768,30 @@ save_chart(emissions_by_type_box_plot(latest_top), "4_emissions_type_box")
 
 
 # =============================================================================
-# Chart 5: Fuel mix by property type
+# Chart 5: Fuel mix of all reporting buildings
 # =============================================================================
 
-
-# Natural gas labels are drawn only on segments at least this wide (share)
-MIN_GAS_LABEL_SHARE = 0.10
-
-
-def fuel_mix(df):
-    """
-    Stacked bars of each property type's share of energy by fuel, with one
-    panel per building category.
-
-    Panels follow CATEGORY_ORDER, and types are sorted by their natural gas
-    share within each panel. Natural gas is drawn first, with its share
-    printed on the bar. Fuels that no building uses are left out.
-
-    Inputs: latest-year DataFrame (top property types).
-    Output: an Altair chart.
-    """
-    fuel_order = [
-        "Natural gas",
-        "Electricity",
-        "District steam",
-        "District chilled water",
-        "Other fuel",
-    ]
-    fuel_use = (
-        df.assign(**{c: df[c].clip(lower=0) for c in FUEL_COLS})
-        .groupby("type_label", observed=True)[list(FUEL_COLS)]
-        .sum()
-        .rename(columns=FUEL_COLS)
-        .reset_index()
-        .melt("type_label", var_name="fuel", value_name="kbtu")
-    )
-    fuel_use["share"] = fuel_use["kbtu"] / fuel_use.groupby("type_label")[
-        "kbtu"
-    ].transform("sum")
-
-    # Leave out fuels that nobody uses, so they do not appear in the legend
-    fuel_totals = fuel_use.groupby("fuel")["kbtu"].sum()
-    fuels_used = [f for f in fuel_order if fuel_totals[f] > 0]
-    gas_share = fuel_totals["Natural gas"] / fuel_totals.sum()
-    fuel_use = fuel_use[fuel_use["fuel"].isin(fuels_used)].copy()
-
-    # Panel (category) and axis label, with the number of buildings, for each
-    # type. Natural gas is drawn first, so its label sits at half its share.
-    reports_fuel = df[list(FUEL_COLS)].notna().any(axis=1)
-    type_info = (
-        df.assign(reports_fuel=reports_fuel)
-        .groupby("type_label", observed=True)
-        .agg(category=("category", "first"), buildings=("reports_fuel", "sum"))
-        .reset_index()
-    )
-    type_info["axis_label"] = (
-        type_info["type_label"]
-        + " ("
-        + type_info["buildings"].map("{:,}".format)
-        + ")"
-    )
-    fuel_use = fuel_use.merge(type_info, on="type_label")
-    fuel_use["gas_middle"] = fuel_use["share"] / 2
-
-    # Sort types by natural gas share (Altair draws each panel in this order)
-    gas_rows = fuel_use[fuel_use["fuel"] == "Natural gas"]
-    type_order = gas_rows.sort_values("share", ascending=False)[
-        "axis_label"
-    ].tolist()
-
-    y_types = alt.Y("axis_label:N", title=None, sort=type_order)
-    bars = (
-        alt.Chart()
-        .mark_bar()
-        .encode(
-            x=alt.X(
-                "share:Q",
-                title="Share of energy use",
-                axis=alt.Axis(format="%"),
-            ),
-            y=y_types,
-            color=alt.Color(
-                "fuel:N",
-                title="Fuel",
-                scale=FUEL_SCALE,
-                legend=alt.Legend(values=fuels_used),
-            ),
-            order=alt.Order("fuel_rank:Q"),
-        )
-        .transform_calculate(fuel_rank=f"indexof({fuel_order}, datum.fuel)")
-    )
-    gas_labels = (
-        alt.Chart()
-        .transform_filter(
-            f"datum.fuel == 'Natural gas' && datum.share >= {MIN_GAS_LABEL_SHARE}"
-        )
-        .mark_text(color="white", fontSize=11, fontWeight="bold")
-        .encode(
-            x=alt.X("gas_middle:Q"),
-            y=y_types,
-            text=alt.Text("share:Q", format=".0%"),
-        )
-    )
-
-    return (
-        alt.layer(bars, gas_labels)
-        .properties(width=CHART_WIDTH, height=alt.Step(PANEL_ROW_HEIGHT))
-        .facet(
-            row=make_category_row(),
-            data=fuel_use,
-            spacing=PANEL_SPACING,
-        )
-        .resolve_scale(y="independent")
-        .properties(
-            title=alt.TitleParams(
-                f"Fuel mix by property type ({LATEST_YEAR})",
-                subtitle=[
-                    f"Natural gas is {gas_share:.0%} of all the energy these "
-                    "buildings use,",
-                    "and over 60% in multifamily housing, senior living and "
-                    "K-12 schools.",
-                ],
-                anchor="start",
-            )
-        )
-    )
-
-
-save_chart(fuel_mix(latest_top), "5_fuel_mix")
-
-
-# =============================================================================
-# Chart 6: The same buildings over time
-# =============================================================================
-
-
-# Column with each building's floor area
-AREA_COLUMN = "gross_floor_area_buildings_sq_ft_"
-LABEL_NUDGE = 9  # Pixels between the end labels of lines that nearly overlap
-# A paler red than the emissions line
-HYPOTHETICAL_EMISSIONS_COLOR = "#EE8B98"
+# Gas and electricity get slices; all other fuels are grouped together
+OTHER_FUELS = "Other fuels"
+DONUT_FUELS = ["Natural gas", "Electricity", OTHER_FUELS]
+DONUT_COLORS = [FLAME, FLAG_BLUE, GRAY]
+DONUT_SIZE = 240  # Pixels
+DONUT_OUTER_RADIUS = 100
+DONUT_INNER_RADIUS = 55
+DONUT_LABEL_RADIUS = 78  # Middle of the ring
+OUTSIDE_LABEL_RADIUS = 114  # Just outside the ring
+MIN_INSIDE_LABEL_SHARE = 0.08  # Smaller slices are labeled outside
+DONUT_LABEL_SIZE = 14
 
 
 def estimate_emission_factors(d):
     """
-    Estimate how many kilograms of CO2e each kBtu of each fuel produces, from
-    the buildings' own fuel use and reported emissions. This is a least
-    squares fit through the origin. A fuel whose fitted factor would be
-    negative is dropped and the fit is repeated.
+    Estimate each fuel's emission factor (kg CO2e per kBtu) from the
+    buildings' fuel use and reported emissions, by least squares through the
+    origin. Fuels with a negative factor are dropped and the fit repeated.
 
-    Inputs: a DataFrame of buildings from one year, with the fuel columns
-        (see FUEL_COLS) and total emissions in metric tons.
-    Output: a Series of factors (kg CO2e per kBtu), indexed by fuel column.
+    Inputs: a DataFrame of buildings from one year.
+    Output: a Series of factors, indexed by fuel column.
     """
     d = d.dropna(subset=[GHG_TOTAL])
     use = d[list(FUEL_COLS)].fillna(0)
@@ -934,6 +807,133 @@ def estimate_emission_factors(d):
         fuels = [f for f in fuels if f not in negative]
     factors = pd.Series(factors, index=fuels)
     return factors.reindex(list(FUEL_COLS), fill_value=0)
+
+
+def summarize_fuel_use(df):
+    """
+    Find each fuel group's share of the energy used and of the emissions
+    (energy times its emission factor).
+
+    Inputs: latest-year DataFrame of reporting buildings.
+    Output: a DataFrame with one row per measure and fuel group: "measure",
+        "fuel", "share" and "fuel_rank" (drawing order).
+    """
+    energy = df[list(FUEL_COLS)].clip(lower=0).sum()
+    emissions = energy * estimate_emission_factors(df)
+    rows = []
+    for measure, amounts in (("Energy used", energy), ("Emissions", emissions)):
+        amounts = amounts.rename(index=FUEL_COLS)
+        groups = [f if f in DONUT_FUELS else OTHER_FUELS for f in amounts.index]
+        shares = amounts.groupby(groups).sum()
+        shares = shares / shares.sum()
+        for fuel in DONUT_FUELS:
+            rows.append(
+                {
+                    "measure": measure,
+                    "fuel": fuel,
+                    "share": shares.get(fuel, 0),
+                    "fuel_rank": DONUT_FUELS.index(fuel),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def make_donut(shares, measure, title, show_legend):
+    """
+    Build one donut of fuel shares, labeled inside the ring (small slices
+    outside it).
+
+    Inputs: the table from summarize_fuel_use, the measure to draw, the
+        title, and whether to show the legend.
+    Output: an Altair chart.
+    """
+    legend = None
+    if show_legend:
+        legend = alt.Legend(orient="bottom", title=None, symbolType="circle")
+    base = alt.Chart(shares[shares["measure"] == measure]).encode(
+        theta=alt.Theta("share:Q", stack=True),
+        color=alt.Color(
+            "fuel:N",
+            scale=alt.Scale(domain=DONUT_FUELS, range=DONUT_COLORS),
+            legend=legend,
+        ),
+        order=alt.Order("fuel_rank:Q"),
+    )
+    ring = base.mark_arc(
+        innerRadius=DONUT_INNER_RADIUS,
+        outerRadius=DONUT_OUTER_RADIUS,
+        stroke="white",
+    )
+    inside_labels = (
+        base.transform_filter(alt.datum.share >= MIN_INSIDE_LABEL_SHARE)
+        .mark_text(
+            radius=DONUT_LABEL_RADIUS,
+            fontSize=DONUT_LABEL_SIZE,
+            fontWeight="bold",
+        )
+        .encode(
+            text=alt.Text("share:Q", format=".0%"),
+            color=alt.value("white"),  # Not the slice color
+        )
+    )
+    outside_labels = (
+        base.transform_filter(alt.datum.share < MIN_INSIDE_LABEL_SHARE)
+        .mark_text(radius=OUTSIDE_LABEL_RADIUS, fontSize=DONUT_LABEL_SIZE)
+        .encode(
+            text=alt.Text("share:Q", format=".0%"),
+            color=alt.value(INK),
+        )
+    )
+    return (ring + inside_labels + outside_labels).properties(
+        width=DONUT_SIZE,
+        height=DONUT_SIZE,
+        title=alt.TitleParams(title, anchor="middle", fontSize=14),
+    )
+
+
+def make_fuel_donuts(df):
+    """
+    Two donuts side by side: fuel shares of energy used and of emissions.
+
+    Inputs: latest-year DataFrame of reporting buildings.
+    Output: an Altair chart.
+    """
+    shares = summarize_fuel_use(df)
+    energy_donut = make_donut(shares, "Energy used", "Share of energy used", True)
+    emissions_donut = make_donut(
+        shares, "Emissions", "Share of emissions", False
+    )
+    return (
+        alt.hconcat(energy_donut, emissions_donut)
+        .resolve_scale(color="shared")
+        .properties(
+            title=alt.TitleParams(
+                f"Fuel mix of Chicago's reporting buildings ({LATEST_YEAR})",
+                subtitle=[
+                    "Left: share of energy used. Right: share of greenhouse "
+                    "gas emissions,",
+                    "estimated from each fuel's emission factor. Other fuels: "
+                    "district steam, chilled water and other fuel.",
+                ],
+                anchor="start",
+            )
+        )
+    )
+
+
+save_chart(make_fuel_donuts(latest), "5_fuel_mix")
+
+
+# =============================================================================
+# Chart 6: The same buildings over time
+# =============================================================================
+
+
+# Column with each building's floor area
+AREA_COLUMN = "gross_floor_area_buildings_sq_ft_"
+LABEL_NUDGE = 9  # Pixels between the end labels of lines that nearly overlap
+# A paler red than the emissions line
+HYPOTHETICAL_EMISSIONS_COLOR = "#EE8B98"
 
 
 def calculate_fixed_factor_intensity(d, start):
