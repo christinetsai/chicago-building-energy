@@ -17,13 +17,17 @@ buildings among them, as places to start reducing emissions.
 
 ## How to run
 
-From the repository root, run one command. It reads the files in `data/` and writes all eight charts as PNG files to `static-viz/charts/`:
+From the repository root, run two commands. The first reads the files in `data/` and writes all nine charts as PNG files to `static-viz/charts/`:
 
 ```
 uv run python src/final_graphs.py
 ```
 
-The page `static-viz/index.html` links to those images. The PDF is printed from the page.
+The second calculates every number quoted in the page text, saves them to `static-viz/text_numbers.json`, and fills them into the page template `static-viz/index_template.html` to write `static-viz/index.html`:
+
+```
+uv run python src/text_numbers.py
+```
 
 
 ## Data Sources
@@ -46,17 +50,15 @@ The page `static-viz/index.html` links to those images. The PDF is printed from 
 
 The draft charts and peer feedback are in `milestones/`.
 
-| Draft chart | Current chart number | What changed in the final |
+| Current figure | Draft chart | What changed |
 |---|---|---|
-| 1. Building dot map | Figure 2 | Replaced with a bubble map by community area with circle size as the number of buildings and color as the share of poorly rated buildings. Ratings are grouped as poorly rated or not, and areas with few buildings are hollow gray. Emissions were removed from this chart. |
-| 2.1 Choropleth | Removed | Removed |
-| 2.2 Choropleth | Figure 2 | Figure 2 labels notable community areas. |
-| 3. GHG choropleth | Removed | Removed |
-| 4. Emissions by type | Figure 5 | Figure 5 puts the average emissions per building next to the total for each type. |
-| 5. Box plot by type | Figure 6 | Figure 6's caption explains the box, the white median line and the whiskers, and a labeled dashed line marks the median of all buildings. |
-| 6. Building age scatter | Removed | Removed |
-| 7. Rating stacked bar | Figures 2 and 8 | Replaced by two groups, poorly rated (1 star) or not. |
-| 8. Fuel mix | Figure 4 | Figure 4 groups the small fuels as "Other fuels" and labels them. Long property type names are shortened. The chart is converted to two donuts to show overall emissions instead. |
-| 9. Same-building trend | Figure 3 | Figure 3 uses plain labels ("energy used per square foot"), labels the line ends, and the terms box defines the emission factor and related terms. |
-| 10. Pareto curve | Figure 7 | Title was updated to be more readable. |
-| 11. Priority buildings | Figure 8 | TBD. |
+| Figure 1, emissions by sector | New (no draft) | Added for context |
+| Figure 2, bubble map | 1. Building dot map; 2.2 Choropleth; 7. Rating stacked bar | Dot map replaced by a bubble map by community area to reduce clutter, notable areas labeled, emissions removed from the chart |
+| Figure 3, same-building trend | 9. Same-building trend | Each building compared with its own 2018 level, plain line names instead of "Site EUI" and "GHG intensity", plain y-axis title, labeled line ends, dashed line showing emissions if the grid had stayed at its 2018 level, terms box defining the emission factor |
+| Figure 4, fuel mix | 8. Fuel mix | Stacked bars by building category replaced by two donuts for all buildings, one for energy and one for emissions, small fuels grouped and labeled as "Other fuels", unused fuels left out of the legend |
+| Figure 5, emissions by type | 4. Emissions by type | Top 15 property types shown, largest two highlighted, bars labeled, long names shortened, second axis converting tons to equivalent cars per year, average emissions per building added beside the totals |
+| Figure 6, emissions per square foot | 5. Box plot by type | Six building categories replaced by ten property types to reduce clutter, sorted by median, building counts in the labels, labeled dashed line at the median of all buildings, outliers removed, caption explaining the box, median line and whiskers |
+| Figure 7, cumulative curve | 10. Pareto curve | Three marked points (top 1%, 5% and 10%) labeled with building counts and shares of emissions, percent signs on the axes, title rewritten to describe the chart |
+| Figure 8, top emitters and poorly rated buildings | 11. Priority buildings | Kept as a scatter with plain labels, one dot size for highlighted buildings, a labeled dashed line where top emitters begin, the largest buildings in both groups named, log axes kept on purpose with a subtitle explaining them, poorly rated limited to 1 star because 0 stars mark missing reports |
+| Figure 9, reduction potential | New (no draft) | Added as a closing view of where the reducible emissions are |
+| Removed | 2.1 Choropleth; 3. GHG choropleth; 6. Building age scatter | Removed |

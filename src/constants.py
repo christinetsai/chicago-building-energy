@@ -36,7 +36,7 @@ SECTOR_VALUE = "million_metric_tons_co2e"
 GEOJSON_URL = "https://data.cityofchicago.org/resource/igwz-8jzy.geojson"
 
 # Star rating that counts as poorly rated.
-POOR_RATING = 1
+ONE_STAR_RATING = 1
 
 # Unit conversions
 MILLION = 1_000_000

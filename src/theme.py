@@ -23,7 +23,7 @@ GRAY = "#8D99AE"
 CHARCOAL = "#4A5568"
 
 # Poorly rated buildings (1 star) use this red on the map and the priority chart
-POOR_RATING_COLOR = STAR_RED
+ONE_STAR_COLOR = STAR_RED
 INK, MUTED, GRID = "#1B2A3A", "#6B7785", "#E6E9ED"
 
 
