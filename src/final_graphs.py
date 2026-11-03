@@ -37,7 +37,7 @@ from constants import (
     PRIORITY_HEIGHT,
     PRIORITY_WIDTH,
     REFERENCE_DASH,
-    POOR_RATING,
+    ONE_STAR_RATING,
     SECTOR_VALUE,
     THOUSAND,
 )
@@ -50,7 +50,7 @@ from theme import (
     GRID,
     INK,
     MUTED,
-    POOR_RATING_COLOR,
+    ONE_STAR_COLOR,
     STAR_RED,
     apply_theme,
 )
@@ -141,8 +141,6 @@ def load_chicago_geojson(path=DATA_DIR / "chicago_community_areas.geojson"):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(gj))
     return gj
-
-
 
 
 # =============================================================================
@@ -286,8 +284,6 @@ def make_sector_chart(df):
     )
 
 
-
-
 # =============================================================================
 # Chart 2: Bubble map of reporting buildings by community area
 # =============================================================================
@@ -424,8 +420,9 @@ def summarize_community_areas(df, geojson):
     Inputs: latest-year DataFrame of reporting buildings, and the community
         area GeoJSON.
     Output: a DataFrame with one row per community area: "community_area",
-        "buildings", "rated", "poor", "poor_share", "longitude", "latitude",
-        and "is_small" (True when there are too few buildings to compare).
+        "buildings", "rated", "one_star", "one_star_share", "longitude",
+        "latitude", and "is_small" (True when there are too few buildings to
+        compare).
     Errors: raises ValueError if an area has no position on the map.
     """
     rating = df["chicago_energy_rating"]
@@ -433,13 +430,13 @@ def summarize_community_areas(df, geojson):
         {
             "community_area": df["community_area"],
             "rated": rating > 0,
-            "poor": rating == POOR_RATING,
+            "one_star": rating == ONE_STAR_RATING,
         }
     )
     areas = counts.groupby("community_area").agg(
         buildings=("rated", "size"),
         rated=("rated", "sum"),
-        poor=("poor", "sum"),
+        one_star=("one_star", "sum"),
     )
     areas = areas.reset_index().merge(
         calculate_area_centers(geojson), on="community_area", how="left"
@@ -447,7 +444,7 @@ def summarize_community_areas(df, geojson):
     unplaced = areas.loc[areas["longitude"].isna(), "community_area"]
     if not unplaced.empty:
         raise ValueError(f"No map position for: {', '.join(unplaced)}")
-    areas["poor_share"] = areas["poor"] / areas["rated"]
+    areas["one_star_share"] = areas["one_star"] / areas["rated"]
     areas["is_small"] = areas["buildings"] < MIN_AREA_BUILDINGS
     return areas
 
@@ -465,7 +462,7 @@ def make_bubble_map(df, geojson):
     """
     areas = summarize_community_areas(df, geojson)
     year = df["data_year"].max()
-    city_share = areas["poor"].sum() / areas["rated"].sum()
+    city_share = areas["one_star"].sum() / areas["rated"].sum()
     size_scale = alt.Scale(
         domain=[0, BUBBLE_MAX_BUILDINGS], range=[0, BUBBLE_MAX_SIZE], clamp=True
     )
@@ -491,10 +488,10 @@ def make_bubble_map(df, geojson):
                 ),
             ),
             color=alt.Color(
-                "poor_share:Q",
+                "one_star_share:Q",
                 scale=alt.Scale(
                     domain=[SHARE_SCALE_MIN, city_share, SHARE_SCALE_MAX],
-                    range=[SHARE_LOW_COLOR, SHARE_MID_COLOR, POOR_RATING_COLOR],
+                    range=[SHARE_LOW_COLOR, SHARE_MID_COLOR, ONE_STAR_COLOR],
                     interpolate="lab",
                     clamp=True,
                 ),
@@ -537,8 +534,6 @@ def make_bubble_map(df, geojson):
             ),
         )
     )
-
-
 
 
 # =============================================================================
@@ -599,32 +594,25 @@ def calculate_fixed_factor_intensity(d, start):
     return intensity.groupby([d["id"], d["data_year"]]).first().unstack()
 
 
-def make_trend_chart(df, start=2018, end=2023):
+def calculate_same_building_trend(df, start, end):
     """
-    Line chart of how the median building's energy use and emissions
-    changed, for the buildings that reported every year. Each building is
-    compared with its own value in the first year, and the line shows the
-    median of those percentages. A dashed line shows what emissions would
-    have been if the emission factors had stayed at their first-year level,
-    which separates a cleaner grid from changes in the buildings.
+    For the buildings that reported every year, find the median building's
+    energy use per square foot, emissions per square foot, and emissions per
+    square foot with the emission factors held at their first-year level.
+    Each building is compared with its own first-year value, and each
+    number is the median of those percentages.
 
-    Inputs: all-years DataFrame, and the first and last year to show.
-    Output: an Altair chart.
+    Inputs: all-years DataFrame, and the first and last year.
+    Output: a tuple of a DataFrame of percentages with one row per year and
+        columns "energy", "emissions" and "fixed", and the Index of the
+        buildings used.
     """
-    energy = "Energy used per square foot"
-    emissions = "Emissions per square foot"
-    fixed = "Emissions with the grid at its 2018 level"
-    metrics = {
-        "site_eui_kbtu_sq_ft_": energy,
-        GHG_INTENSITY: emissions,
-    }
+    metrics = {"site_eui_kbtu_sq_ft_": "energy", GHG_INTENSITY: "emissions"}
     d = df[df["data_year"].between(start, end)]
     wide = d.pivot_table(index="id", columns="data_year", values=list(metrics))
     ids = wide.dropna().index  # buildings with every metric in every year
     wide = wide.loc[ids]
 
-    # Each building as a percent of its own first-year value, then the
-    # median across buildings for each year
     trend = pd.DataFrame(
         {
             name: (wide[column].div(wide[column][start], axis=0) * 100).median()
@@ -633,8 +621,28 @@ def make_trend_chart(df, start=2018, end=2023):
     )
     held = calculate_fixed_factor_intensity(d[d["id"].isin(ids)], start)
     held = held.where(held[start] > 0)
-    trend[fixed] = (held.div(held[start], axis=0) * 100).median()
+    trend["fixed"] = (held.div(held[start], axis=0) * 100).median()
+    return trend, ids
 
+
+def make_trend_chart(df, start=2018, end=2023):
+    """
+    Line chart of how the median building's energy use and emissions
+    changed, for the buildings that reported every year. A dashed line shows
+    what emissions would have been if the emission factors had stayed at
+    their first-year level, which separates a cleaner grid from changes in
+    the buildings.
+
+    Inputs: all-years DataFrame, and the first and last year to show.
+    Output: an Altair chart.
+    """
+    energy = "Energy used per square foot"
+    emissions = "Emissions per square foot"
+    fixed = "Emissions with the grid at its 2018 level"
+    trend, ids = calculate_same_building_trend(df, start, end)
+    trend = trend.rename(
+        columns={"energy": energy, "emissions": emissions, "fixed": fixed}
+    )
     trend = trend.reset_index().melt(
         "data_year", var_name="measure", value_name="index"
     )
@@ -716,8 +724,6 @@ def make_trend_chart(df, start=2018, end=2023):
             anchor="start",
         ),
     )
-
-
 
 
 # =============================================================================
@@ -853,8 +859,6 @@ def make_fuel_donuts(df):
             )
         )
     )
-
-
 
 
 # =============================================================================
@@ -1025,8 +1029,6 @@ def make_type_totals_chart(df):
     )
 
 
-
-
 # =============================================================================
 # Chart 6: Emissions per square foot by property type (box plot)
 # =============================================================================
@@ -1160,8 +1162,6 @@ def make_type_box_plot(df):
     )
 
 
-
-
 # =============================================================================
 # Chart 7: Cumulative emissions curve
 # =============================================================================
@@ -1175,6 +1175,52 @@ MARKER_LABEL_DX = 10  # Pixels
 MARKER_LABEL_DY = 14
 
 
+def calculate_cumulative_emissions(df):
+    """
+    Order the buildings from largest to smallest emissions and find the
+    share of all emissions that the buildings so far produce.
+
+    Inputs: latest-year DataFrame.
+    Output: a DataFrame with one row per building, largest first, with
+        added columns "pct_buildings" and "cum_pct_emissions".
+    """
+    ghg = GHG_TOTAL
+    cumulative = (
+        df.dropna(subset=[ghg])
+        .sort_values(ghg, ascending=False)
+        .reset_index(drop=True)
+    )
+    cumulative["pct_buildings"] = (cumulative.index + 1) / len(cumulative) * 100
+    cumulative["cum_pct_emissions"] = (
+        cumulative[ghg].cumsum() / cumulative[ghg].sum() * 100
+    )
+    return cumulative
+
+
+def calculate_pareto_marks(cumulative):
+    """
+    Find the point on the curve for each share of buildings in
+    MARK_PERCENTS.
+
+    Inputs: the DataFrame from calculate_cumulative_emissions.
+    Output: a DataFrame with one row per mark: "percent", "buildings",
+        "pct_buildings" and "cum_pct_emissions".
+    """
+    marks = []
+    for percent in MARK_PERCENTS:
+        buildings = round(len(cumulative) * percent / 100)
+        row = cumulative.iloc[buildings - 1]
+        marks.append(
+            {
+                "percent": percent,
+                "buildings": buildings,
+                "pct_buildings": row["pct_buildings"],
+                "cum_pct_emissions": row["cum_pct_emissions"],
+            }
+        )
+    return pd.DataFrame(marks)
+
+
 def make_pareto_chart(df):
     """
     Cumulative share of emissions as buildings are added largest first,
@@ -1183,33 +1229,21 @@ def make_pareto_chart(df):
     Inputs: latest-year DataFrame.
     Output: an Altair chart.
     """
-    ghg = GHG_TOTAL
-    cumulative = (
-        df.dropna(subset=[ghg])
-        .sort_values(ghg, ascending=False)
-        .reset_index(drop=True)
-    )
+    cumulative = calculate_cumulative_emissions(df)
     building_count = len(cumulative)
-    cumulative["pct_buildings"] = (cumulative.index + 1) / building_count * 100
-    cumulative["cum_pct_emissions"] = (
-        cumulative[ghg].cumsum() / cumulative[ghg].sum() * 100
-    )
 
     # One marked point for each share of buildings, labeled with the number
     # of buildings and the share of emissions they produce
-    marks = []
-    for percent in MARK_PERCENTS:
-        buildings = round(building_count * percent / 100)
-        row = cumulative.iloc[buildings - 1]
-        marks.append(
-            {
-                "pct_buildings": row["pct_buildings"],
-                "cum_pct_emissions": row["cum_pct_emissions"],
-                "label": f"Top {percent}% ({buildings:,} buildings) = "
-                f"{row['cum_pct_emissions']:.0f}% of emissions",
-            }
-        )
-    marks = pd.DataFrame(marks)
+    marks = calculate_pareto_marks(cumulative)
+    marks["label"] = (
+        "Top "
+        + marks["percent"].astype(str)
+        + "% ("
+        + marks["buildings"].map("{:,}".format)
+        + " buildings) = "
+        + marks["cum_pct_emissions"].map("{:.0f}".format)
+        + "% of emissions"
+    )
 
     line = (
         alt.Chart(cumulative)
@@ -1259,8 +1293,6 @@ def make_pareto_chart(df):
             anchor="start",
         ),
     )
-
-
 
 
 # =============================================================================
@@ -1344,7 +1376,7 @@ def select_priority_buildings(df):
 
     Inputs: latest-year DataFrame.
     Output: a tuple of the DataFrame of those buildings with added "is_top"
-        and "is_poor" columns, and the emissions cutoff (metric tons) for a
+        and "is_one_star" columns, and the emissions cutoff (metric tons) for a
         top emitter.
     """
     d = df.dropna(subset=[GHG_TOTAL, GHG_INTENSITY, "chicago_energy_rating"])
@@ -1352,7 +1384,7 @@ def select_priority_buildings(df):
     cutoff = d[GHG_TOTAL].quantile(1 - PRIORITY_TOP_SHARE)
     d = d.assign(
         is_top=d[GHG_TOTAL] >= cutoff,
-        is_poor=d["chicago_energy_rating"] == POOR_RATING,
+        is_one_star=d["chicago_energy_rating"] == ONE_STAR_RATING,
     )
     return d, cutoff
 
@@ -1369,7 +1401,7 @@ def make_priority_scatter(df):
     """
     d, cutoff = select_priority_buildings(df)
     group = np.select(
-        [d["is_top"] & d["is_poor"], d["is_top"], d["is_poor"]],
+        [d["is_top"] & d["is_one_star"], d["is_top"], d["is_one_star"]],
         ["Both", "Top emitter only", "Poorly rated only"],
         default="Other buildings",
     )
@@ -1434,7 +1466,7 @@ def make_priority_scatter(df):
                     domain=names,
                     range=[
                         AMBER,
-                        POOR_RATING_COLOR,
+                        ONE_STAR_COLOR,
                         PRIORITY_BOTH_COLOR,
                         OTHER_DOTS_COLOR,
                     ],
@@ -1532,104 +1564,137 @@ def make_priority_scatter(df):
     )
 
 
-
-
 # =============================================================================
-# NUMBERS QUOTED IN THE TEXT
-# Figures that the page quotes but the charts do not show
+# Chart 9: Emissions above the typical building of each property type
 # =============================================================================
 
-# A building is "high for its type" when its emissions per square foot are in
-# the top quarter of its property type. Types with fewer than
-# PEER_MIN_BUILDINGS buildings are too small to judge.
-HIGH_FOR_TYPE_PERCENTILE = 0.75
+# Types with fewer buildings than this are too small to judge, so their
+# buildings are not counted as above typical
 PEER_MIN_BUILDINGS = 10
-NAMED_BUILDINGS = 3  # Largest priority buildings named in the text
-OFFICE_AND_HOUSING = ["Multifamily Housing", "Office"]
+# A building is "high for its type" when its emissions per square foot are in
+# the top quarter of its property type
+HIGH_FOR_TYPE_PERCENTILE = 0.75
+REDUCTION_TYPES_SHOWN = 8
+REDUCTION_HIGHLIGHT_COUNT = 2
+REDUCTION_LABEL_ROOM = 1.25  # Axis extends past the longest bar for its label
+REDUCTION_LABEL_SIZE = 13
+REDUCTION_AXIS_LABEL_LIMIT = 300  # Pixels
 
 
-def summarize_text_numbers(df):
+def calculate_excess_emissions(d):
     """
-    Work out the numbers that the page quotes but the charts do not show:
-    median emissions by star rating, the priority buildings and what they
-    could save, and the share of emissions from groups of property types.
+    Find the tons each building emits above what it would emit at the median
+    emissions per square foot of its property type. Buildings at or below
+    the median, and buildings in types with fewer than PEER_MIN_BUILDINGS
+    buildings, get 0.
 
-    Inputs: latest-year DataFrame.
-    Output: a list of (description, value) pairs of text.
+    Inputs: DataFrame from select_priority_buildings.
+    Output: a Series of tons, with the same index as the DataFrame.
     """
-    d, _ = select_priority_buildings(df)
-    total = df[GHG_TOTAL].sum()
+    by_type = d.groupby("primary_property_type")
+    big_enough = by_type[GHG_TOTAL].transform("count") >= PEER_MIN_BUILDINGS
+    type_median = by_type[GHG_INTENSITY].transform("median")
+    excess = d[GHG_TOTAL] * (1 - type_median / d[GHG_INTENSITY])
+    return excess.where(big_enough, 0).clip(lower=0)
 
-    def share(tons):
-        return f"{tons / total:.1%}"
 
-    # Each building compared with the others of its property type
+def select_high_for_type(d):
+    """
+    Find the priority buildings (top emitters that are poorly rated) that
+    are in the top quarter of their property type for emissions per square
+    foot. Types with fewer than PEER_MIN_BUILDINGS buildings are skipped.
+
+    Inputs: DataFrame from select_priority_buildings.
+    Output: the DataFrame of those buildings.
+    """
     by_type = d.groupby("primary_property_type")
     big_enough = by_type[GHG_TOTAL].transform("count") >= PEER_MIN_BUILDINGS
     percentile = by_type[GHG_INTENSITY].rank(pct=True).where(big_enough)
-    type_median = by_type[GHG_INTENSITY].transform("median")
-    both = d[d["is_top"] & d["is_poor"]]
-    high = both[percentile[both.index] >= HIGH_FOR_TYPE_PERCENTILE]
-    saved = (
-        high[GHG_TOTAL] * (1 - type_median[high.index] / high[GHG_INTENSITY])
-    ).clip(lower=0)
+    both = d[d["is_top"] & d["is_one_star"]]
+    return both[percentile[both.index] >= HIGH_FOR_TYPE_PERCENTILE]
 
-    # Property types that are much more intense than the city as a whole
-    city_median = df[GHG_INTENSITY].median()
-    type_stats = df.groupby("type_label", observed=True).agg(
-        median=(GHG_INTENSITY, "median"), buildings=(GHG_INTENSITY, "count")
+
+def make_reduction_chart(df):
+    """
+    Bars of the emissions that would be cut if buildings came down to the
+    median emissions per square foot of their property type: one bar for
+    each of the REDUCTION_TYPES_SHOWN types with the most to cut, and one for
+    the priority buildings of Figure 8 that are high for their type (which
+    are also counted in their types). Each label shows how many buildings
+    would have to change.
+
+    Inputs: latest-year DataFrame.
+    Output: an Altair chart.
+    """
+    d, _ = select_priority_buildings(df)
+    d = d.assign(excess=calculate_excess_emissions(d))
+    by_type = d.groupby("type_label", observed=True)["excess"].agg(
+        tons="sum", buildings=lambda excess: (excess > 0).sum()
     )
-    intense = type_stats.index[
-        (type_stats["median"] >= INTENSE_MULTIPLE * city_median)
-        & (type_stats["buildings"] >= MIN_INTENSE_BUILDINGS)
-    ]
-    housing_and_offices = df["primary_property_type"].isin(OFFICE_AND_HOUSING)
+    by_type = by_type.nlargest(REDUCTION_TYPES_SHOWN, "tons")
+    priority = d.loc[select_high_for_type(d).index]
+    priority_name = "Priority buildings high for type"
 
-    stars = d.groupby("chicago_energy_rating")[GHG_INTENSITY].median()
-    pairs = [
-        ("Median kg CO2e per sq ft, 1-star buildings", f"{stars[1]:.1f}"),
-        ("Median kg CO2e per sq ft, 4-star buildings", f"{stars[4]:.1f}"),
-        ("Priority buildings (top emitters rated 1 star)", f"{len(both)}"),
-        ("Their emissions (tons)", f"{both[GHG_TOTAL].sum():,.0f}"),
-        ("Their share of reported emissions", share(both[GHG_TOTAL].sum())),
-        ("Of those, in the top quarter of their type", f"{len(high)}"),
-        (
-            "Tons saved if those matched their type's median",
-            f"{saved.sum():,.0f}",
+    # Types first, then an empty row that separates the priority buildings
+    rows = pd.DataFrame(
+        {
+            "name": [*by_type.index, SPACER_ROW, priority_name],
+            "tons": [*by_type["tons"], np.nan, priority["excess"].sum()],
+            "buildings": [*by_type["buildings"], 0, len(priority)],
+        }
+    )
+    rows["row"] = rows["name"] + rows["buildings"].map(
+        " ({:,} buildings)".format
+    )
+    rows.loc[rows["name"] == SPACER_ROW, "row"] = SPACER_ROW
+    rows["label"] = rows["tons"].map(lambda t: f"{format_compact_tons(t)} tons")
+    rows.loc[rows["name"] == SPACER_ROW, "label"] = ""
+    rows["fill"] = OTHER_BAR_COLOR
+    rows.loc[: REDUCTION_HIGHLIGHT_COUNT - 1, "fill"] = HIGHLIGHT_BAR_COLOR
+    rows.loc[rows["name"] == priority_name, "fill"] = PRIORITY_BOTH_COLOR
+
+    base = alt.Chart(rows).encode(
+        y=alt.Y(
+            "row:N",
+            sort=rows["row"].tolist(),
+            title=None,
+            axis=alt.Axis(labelLimit=REDUCTION_AXIS_LABEL_LIMIT),
         ),
-        ("That as a share of reported emissions", share(saved.sum())),
-        (
-            "Poorly rated buildings that are not top emitters",
-            f"{(~d[d['is_poor']]['is_top']).mean():.1%}",
+        x=alt.X(
+            "tons:Q",
+            title="Tons of CO2e per year above the type's median",
+            scale=alt.Scale(
+                domain=[0, rows["tons"].max() * REDUCTION_LABEL_ROOM]
+            ),
+            axis=alt.Axis(format="~s"),
         ),
-        (
-            "Multifamily housing and offices, share of emissions",
-            share(df[housing_and_offices][GHG_TOTAL].sum()),
+    )
+    bars = base.mark_bar().encode(color=alt.Color("fill:N", scale=None))
+    labels = base.mark_text(
+        align="left", dx=LABEL_GAP, fontSize=REDUCTION_LABEL_SIZE
+    ).encode(text="label:N")
+    return (bars + labels).properties(
+        width=CHART_WIDTH,
+        height=CHART_HEIGHT,
+        title=alt.TitleParams(
+            "Emissions above the typical building of each property type",
+            subtitle=[
+                "Tons per year cut if each building above the median emissions "
+                "per square foot of its",
+                "property type came down to it. Parentheses: buildings that "
+                "would change. The last bar is also counted above.",
+            ],
+            anchor="start",
         ),
-        (
-            "Intense property types, share of emissions",
-            share(df[df["type_label"].isin(intense)][GHG_TOTAL].sum()),
-        ),
-    ]
-    # The largest priority buildings. A name that is only a number is replaced
-    # by the address.
-    for _, row in both.nlargest(NAMED_BUILDINGS, GHG_TOTAL).iterrows():
-        name = row["property_name"]
-        if str(name).strip().isdigit():
-            name = row["address"]
-        pairs.append(
-            (f"Priority building {name} (tons)", f"{row[GHG_TOTAL]:,.0f}")
-        )
-    return pairs
+    )
 
 
 def main():
     """
-    Load the data, save the eight charts to static-viz/charts/, and print extra
-    analysis numbers.
+    Load the data and save the nine charts to static-viz/charts/.
 
     Inputs: none (reads the files in data/).
-    Output: none (writes eight PNG files and prints to the screen).
+    Output: none (writes nine PNG files).
     """
     apply_theme()
     alt.data_transformers.disable_max_rows()
@@ -1649,8 +1714,7 @@ def main():
     save_chart(
         make_priority_scatter(latest), "8_priority_buildings", scale_factor=2.0
     )
-    for description, value in summarize_text_numbers(latest):
-        print(f"{description}: {value}")
+    save_chart(make_reduction_chart(latest), "9_reduction_potential")
 
 
 if __name__ == "__main__":
