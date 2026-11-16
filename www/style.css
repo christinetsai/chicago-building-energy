@@ -1,0 +1,33 @@
+/* Chicago flag palette (City design system) plus energy-adjacent accents */
+:root {
+  --flag-blue: #41B6E6;
+  --star-red: #E4002B;
+  --header-white: #FFFFFF;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+}
+
+/* ---------- Header: flag stripes and four red stars ---------- */
+.header { background: var(--header-white); }
+.stripe { height: 18px; background: var(--flag-blue); }
+.header-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 48px 20px 40px;
+}
+.stars { margin: 0 0 8px; color: var(--star-red); font-size: 1.6rem; letter-spacing: 0.15em; }
+h1 { margin: 0 0 12px; font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.1; }
+
+/* ---------- Content ---------- */
+main { max-width: 960px; margin: 0 auto; padding: 0 20px; }
+section { padding: 40px 0 16px; }
+section p { max-width: 68ch; }
+h2 { margin: 0 0 8px; font-size: 1.7rem; }
+h2::after { content: ""; display: block; width: 56px; height: 4px; margin-top: 8px; background: var(--star-red); }
+.intro { font-size: 1.15rem; }
