@@ -1,0 +1,6 @@
+measure,value,unit,source
+Residential natural gas use 2017,921372194,therms,"City of Chicago 2017 GHG Inventory Report, Table 8"
+Residential electricity use 2017,6149008543,kWh,"City of Chicago 2017 GHG Inventory Report, Table 8"
+Commercial and manufacturing natural gas use 2017,664325349,therms,"City of Chicago 2017 GHG Inventory Report, Table 11"
+Commercial and manufacturing electricity use 2017,16551430085,kWh,"City of Chicago 2017 GHG Inventory Report, Table 11"
+Electricity emission factor 2017 (eGRID RFCW),1243.54,lbs CO2e/MWh,"City of Chicago 2017 GHG Inventory Report, Table 5"
