@@ -15,7 +15,7 @@
     "end_year": 2023,
     "buildings_in_panel": 745,
     "settings": {
-      "efficiencyRate": 0.026053879451103046,
+      "efficiency": 0.45511677611016077,
       "electrification": 0.0,
       "gridCleaning": 0.7682294554690541
     },

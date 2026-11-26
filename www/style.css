@@ -31,3 +31,80 @@ section p { max-width: 68ch; }
 h2 { margin: 0 0 8px; font-size: 1.7rem; }
 h2::after { content: ""; display: block; width: 56px; height: 4px; margin-top: 8px; background: var(--star-red); }
 .intro { font-size: 1.15rem; }
+
+/* ---------- Simulation ---------- */
+:root {
+  --ink: #1B2A3A;
+  --muted: #6B7785;
+  --grid: #E6E9ED;
+  --deep-blue: #1C7FB5;
+}
+#simulation { max-width: 960px; }
+sup a { color: var(--deep-blue); text-decoration: none; }
+
+.presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.preset {
+  padding: 8px 14px;
+  border: 2px solid var(--deep-blue);
+  border-radius: 20px;
+  background: var(--header-white);
+  color: var(--deep-blue);
+  font: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+.preset:hover { background: #EAF6FC; }
+.preset.active { background: var(--deep-blue); color: var(--header-white); }
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+fieldset { margin: 0; padding: 8px 16px 12px; border: 1px solid var(--grid); border-radius: 8px; }
+legend { padding: 0 6px; font-weight: bold; }
+.slider-box { padding: 8px 0; }
+.slider-label { display: block; font-weight: bold; }
+.slider-help { display: block; color: var(--muted); font-size: 0.85rem; line-height: 1.3; }
+.slider-control { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+.slider-control input { flex: 1; accent-color: var(--deep-blue); }
+.slider-control output { min-width: 3.2em; text-align: right; font-weight: bold; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 4px; font-size: 0.9rem; }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 14px; height: 14px; border-radius: 3px; }
+
+.chart { width: 100%; }
+.chart svg { display: block; }
+.chart .grid line { stroke: var(--grid); }
+.chart .grid .domain { display: none; }
+.chart .axis text { fill: var(--ink); font-size: 12px; }
+.chart .axis path, .chart .axis line { stroke: #B8C0C8; }
+.chart .axis-title { fill: var(--ink); font-size: 12px; }
+.chart .goal-line { stroke-width: 2; stroke-dasharray: 6 4; }
+.chart .goal-label { font-size: 13px; font-weight: bold; }
+.chart .total-label { fill: var(--ink); font-size: 12px; font-weight: bold; }
+
+.result { margin: 12px 0; padding: 12px 18px; border-left: 6px solid var(--muted); background: #F5F7F9; }
+.result.met { border-color: #2E9E6B; }
+.result.missed { border-color: var(--star-red); }
+.result p { margin: 6px 0; max-width: none; }
+.result .title { font-size: 1.2rem; font-weight: bold; }
+
+.notes { margin-top: 20px; color: var(--muted); font-size: 0.85rem; }
+.notes p { margin: 6px 0; max-width: 80ch; }
+.slider-unit { display: block; color: var(--deep-blue); font-size: 0.85rem; }
+/* White outline so labels are readable even when overlapping areas */
+.chart .goal-label, .chart .total-label {
+  paint-order: stroke;
+  stroke: #FFFFFF;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+/* Notes and sources section at the bottom of the page */
+.notes-sources h3 { margin: 20px 0 6px; font-size: 1.05rem; }
+.notes-sources ul.notes { padding-left: 20px; max-width: 80ch; }
+.notes-sources ul.notes li { margin: 6px 0; }
+.notes-sources a { color: inherit; }

@@ -31,7 +31,103 @@
       <h2>Which buildings emit the most?</h2>
     </section>
 
+    <section id="simulation">
+      <h2>Can Chicago reach its 2040 goal?</h2>
+      <p>The City's 2022 Climate Action Plan aims to cut citywide emissions
+        62% below 2017 levels by 2040.<sup><a href="#note-goal">1</a></sup>
+        Heating, cooling and powering buildings and industry caused 69% of
+        Chicago's emissions in 2017.
+        
+        Adjust the settings below to see how changes in energy efficiency,
+        electrification, and cleaning the electric grid can decrease Chicago's
+        emissions over time.</p>
+
+      <div id="presets" class="presets" role="group"
+        aria-label="Preset scenarios"></div>
+
+      <div class="controls">
+        <fieldset>
+          <legend>Buildings</legend>
+          <div id="sliders-buildings"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Other</legend>
+          <div id="sliders-other"></div>
+        </fieldset>
+      </div>
+
+      <div id="legend" class="legend"></div>
+      <div id="chart" class="chart"></div>
+      <div id="result" class="result" aria-live="polite"></div>
+
+      <div class="notes">
+        <p id="note-goal"><sup>1</sup> The 62% goal covers all of the city's
+          emissions, not just buildings. The 2017 total is 31.0 million
+          metric tons of CO2e (MMT), so the goal is 11.8 MMT. Buildings alone
+          cannot reach it because the other sectors already emit more than
+          that, so the sliders for industry, transportation, and waste treat
+          each of these sectors as a block.</p>
+        <p><sup>2</sup> Large buildings come from the City's energy
+          benchmarking data. The rest of each segment is estimated by taking the 
+          remainder from subtracting the benchmarked large buildings from the
+          2017 GHG report.</p>
+        <p><sup>3</sup> Electrification assumes a heat pump delivers about
+          2.8 units of heat per unit of electricity, replacing a furnace
+          that is 80% efficient. More notes on sources and assumptions can be
+          found in the README.</p>
+        <p id="note-efficiency"><sup>4</sup> Efficiency saves energy but
+          cannot remove the need for it: people still need heat, hot water,
+          light and working buildings, and each upgrade saves less than the
+          one before it. The slider stops at 60% less energy per building by
+          2040 as an assumed ceiling, not a measured limit. For comparison,
+          the pace measured in the benchmarking data from 2018 to 2023, kept
+          up until 2040, is about a 45% drop.</p>
+      </div>
+    </section>
+
+    <section id="notes-sources" class="notes-sources">
+      <h2>Notes/Sources</h2>
+
+      <h3>How buildings are grouped</h3>
+      <ul class="notes">
+        <li><strong>Residential buildings are split in two. </strong>
+          <em>Multifamily housing</em> is the large buildings in the
+          benchmarking data that are places to live: apartment buildings,
+          dormitories, senior care and residential care communities, and
+          other lodging or residential buildings. <em>Other homes and small
+          buildings</em> is everything else the City counts as residential,
+          mostly single-family homes, two-flats and small apartment
+          buildings. It is estimated using the remainder from citywide
+          measurements of total building emissions.</li>
+        <li><strong>Commercial buildings</strong> are the other benchmarked
+          types (offices, hospitals, schools, hotels, etc.) plus a
+          remainder for smaller commercial buildings. The City reports water
+          pumping and wastewater treatment energy in this group too, so the
+          remainder includes a portion of that.</li>
+        <li><strong>Industry</strong> (manufacturing and construction) is not
+          in the benchmarking data. Its energy is calculated from the 2017
+          citywide emissions data.</li>
+      </ul>
+
+      <h3>Sources</h3>
+      <ul class="notes">
+        <li>City of Chicago. <em>Chicago Energy Benchmarking</em> [Data set].
+          Chicago Data Portal.
+          <a href="https://data.cityofchicago.org/Environment-Sustainable-Development/Chicago-Energy-Benchmarking/xq83-jr8c">data.cityofchicago.org</a></li>
+        <li>City of Chicago. <em>Greenhouse Gas Inventory Report, Calendar
+          Year 2017</em>.
+          <a href="https://www.chicago.gov/content/dam/city/progs/env/GHG_Inventory/Chicago-2017-GHG-Report_Final.pdf">chicago.gov (PDF)</a></li>
+        <li>City of Chicago. (2022). <em>2022 Chicago Climate Action
+          Plan</em>.
+          <a href="https://www.chicago.gov/city/en/sites/climate-action-plan/home.html">chicago.gov</a></li>
+      </ul>
+    </section>
+
   </main>
+
+  <script src="js/d3.v7.js"></script>
+  <script src="js/simulation.js"></script>
+  <script src="js/app.js"></script>
 
 </body>
 </html>

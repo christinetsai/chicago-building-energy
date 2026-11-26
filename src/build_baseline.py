@@ -325,7 +325,8 @@ def calculate_current_trend():
 
     Three measurements taken from the benchmarking data:
       efficiency: the median same-building drop in energy use per square
-          foot (the line in Figure 3), turned into a yearly rate.
+          foot (the line in Figure 3), kept at the same yearly pace until
+          the goal year and turned into a total drop by then.
       electrification: how much the gas share of the same buildings' energy
           fell. It rose slightly, so this comes out as 0.
       grid cleaning: the fall in the electricity emission factor, held at
@@ -346,7 +347,9 @@ def calculate_current_trend():
         benchmarks, TREND_START, TREND_END
     )
     energy_left = trend.loc[TREND_END, "energy"] / 100
-    efficiency_rate = 1 - energy_left ** (1 / years)
+    # Energy keeps shrinking by the same share each year, so by the goal year
+    # a building has (energy_left ** (horizon / years)) of its energy left.
+    efficiency = 1 - energy_left ** (horizon / years)
 
     # Electrification: gas share of the same buildings' total energy
     panel = benchmarks[benchmarks["id"].isin(ids)]
@@ -370,7 +373,7 @@ def calculate_current_trend():
         "end_year": TREND_END,
         "buildings_in_panel": len(ids),
         "settings": {
-            "efficiencyRate": efficiency_rate,
+            "efficiency": efficiency,
             "electrification": min(electrification, 1.0),
             "gridCleaning": min(grid_cleaning, 1.0),
         },
