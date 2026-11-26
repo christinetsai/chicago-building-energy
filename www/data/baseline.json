@@ -1,0 +1,72 @@
+{
+  "baseline_year": 2017,
+  "goal_year": 2040,
+  "units": {
+    "energy": "billion kBtu",
+    "factor": "kg CO2e per kBtu",
+    "emissions": "million metric tons CO2e"
+  },
+  "factors": {
+    "electricity": 0.1653165890561078,
+    "gas": 0.053114496311791236
+  },
+  "trend": {
+    "start_year": 2018,
+    "end_year": 2023,
+    "buildings_in_panel": 745,
+    "settings": {
+      "efficiencyRate": 0.026053879451103046,
+      "electrification": 0.0,
+      "gridCleaning": 0.7682294554690541
+    },
+    "measured": {
+      "energy_per_sqft_end_pct_of_start": 87.63440860215054,
+      "gas_share_start": 0.5006905531044541,
+      "gas_share_end": 0.5038776629609719,
+      "electricity_factor_start": 0.16675941696323923,
+      "electricity_factor_end": 0.13890952650932484
+    }
+  },
+  "buildings": {
+    "residential_large": {
+      "electricity_bkbtu": 7.716693663,
+      "gas_bkbtu": 15.34102835,
+      "estimated": false
+    },
+    "residential_small": {
+      "electricity_bkbtu": 13.263723485716,
+      "gas_bkbtu": 76.79619105,
+      "estimated": true
+    },
+    "commercial_large": {
+      "electricity_bkbtu": 20.663751502,
+      "gas_bkbtu": 14.273821457,
+      "estimated": false
+    },
+    "commercial_small": {
+      "electricity_bkbtu": 10.302783854367267,
+      "gas_bkbtu": 34.418008073272006,
+      "estimated": true
+    }
+  },
+  "industry": {
+    "electricity_bkbtu": 25.50693807606242,
+    "gas_bkbtu": 17.769838095790654
+  },
+  "fixed": {
+    "transportation_mmt": 7.504969,
+    "waste_mmt": 2.093279,
+    "other_mmt": 0.208823
+  },
+  "left_out": {
+    "benchmarked_other_fuel_mmt": 0.2109004880267819
+  },
+  "totals": {
+    "city_mmt": 31.035386,
+    "buildings_mmt": 16.067757,
+    "industry_mmt": 5.160556,
+    "goal_reduction": 0.62,
+    "goal_mmt": 11.79344668,
+    "modeled_total_mmt": 31.035384
+  }
+}
